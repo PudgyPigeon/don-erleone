@@ -1,0 +1,20 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ~/models/ollama_storage:/root/.ollama
+    devices:
+      - nvidia.com/gpu=all
+    environment:
+      - OLLAMA_NUM_PARALLEL=2     
+      - OLLAMA_MAX_LOADED_MODELS=2 
+
+  ollama-puller:
+    image: curlimages/curl:latest
+    container_name: ollama-puller
+    depends_on:
+      - ollama
+    entrypoint: [ "curl", "-X", "POST", "http://ollama:11434/api/pull", "-d", '{"name": "llama3.1:8b"}' ] # llama3.1:8b qwen3.5:9b

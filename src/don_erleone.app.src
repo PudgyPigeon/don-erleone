@@ -1,0 +1,13 @@
+{application,
+ don_erleone,
+ [{description,
+   "Don Erleone - Agentic Brain  Orchestrator"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {entrypoint, []}}, 
+  {applications,
+   [kernel, stdlib, mnesia, cowboy, jsx, inets]},
+  {env, []},
+  {modules, []}]}
+
+.
