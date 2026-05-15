@@ -1,0 +1,2 @@
+-name ${NODE_NAME:-don_erleone}@${POD_IP:-127.0.0.1}
+-setcookie ${NODE_COOKIE:-agentic_brain_secret}

@@ -17,4 +17,4 @@ services:
     container_name: ollama-puller
     depends_on:
       - ollama
-    entrypoint: [ "curl", "-X", "POST", "http://ollama:11434/api/pull", "-d", '{"name": "llama3.1:8b"}' ] # llama3.1:8b qwen3.5:9b
+    entrypoint: [ "curl", "-X", "POST", "http://ollama:11434/api/pull", "-d", '{"name": "qwen3.5:0.8b"}' ] # llama3.1:8b qwen3.5:9b
