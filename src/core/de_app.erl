@@ -7,9 +7,9 @@
 
 -export([start/2, stop/1]).
 
--spec start(application:start_type(), term()) -> {ok,
-                                                  pid()} |
-                                                 {error, term()}.
+-spec start(application:start_type(), term()) ->
+    {ok, pid()}
+    | {error, term()}.
 
 start(_StartType, _StartArgs) ->
     %% Setup Telemetry early
@@ -19,8 +19,7 @@ start(_StartType, _StartArgs) ->
     %% Initialize Database
     case de_store:init_db() of
         ok -> ok;
-        {error, DbErr} ->
-            logger:error(#{event => db_init_failed, error => DbErr})
+        {error, DbErr} -> logger:error(#{event => db_init_failed, error => DbErr})
     end,
     de_sup:start_link().
 

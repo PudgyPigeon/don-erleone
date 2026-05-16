@@ -5,12 +5,14 @@
 
 -behaviour(gen_server).
 
--export([start_link/0,
-         init/1,
-         handle_call/3,
-         handle_cast/2,
-         handle_info/2,
-         terminate/2]).
+-export([
+    start_link/0,
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2
+]).
 
 -define(LISTENER_REF, http_frontend_listener).
 
@@ -25,10 +27,12 @@
 -spec start_link() -> {ok, pid()} | {error, term()}.
 
 start_link() ->
-    gen_server:start_link({local, ?MODULE},
-                          ?MODULE,
-                          [],
-                          []).
+    gen_server:start_link(
+        {local, ?MODULE},
+        ?MODULE,
+        [],
+        []
+    ).
 
 -spec init(list()) -> {ok, state()} | {stop, term()}.
 
@@ -38,12 +42,16 @@ init([]) ->
 
     case start_http_listener() of
         {ok, _Pid} ->
-            logger:info(#{event => http_frontend_operational,
-                          port => 8080}),
+            logger:info(#{
+                event => http_frontend_operational,
+                port => 8080
+            }),
             {ok, #de_front_state{}};
         {error, Reason} ->
-            logger:error(#{event => http_frontend_failed,
-                           reason => Reason}),
+            logger:error(#{
+                event => http_frontend_failed,
+                reason => Reason
+            }),
             {stop, {cowboy_start_failed, Reason}}
     end.
 
@@ -57,43 +65,54 @@ terminate(_Reason, _State) ->
 %% HTTP Configuration (The "Functional" Chunks)
 %% =============================================================================
 
--spec start_http_listener() -> {ok, pid()} |
-                               {error, term()}.
+-spec start_http_listener() ->
+    {ok, pid()}
+    | {error, term()}.
 
 start_http_listener() ->
     Dispatch = build_dispatch_rules(),
-    Port = application:get_env(don_erleone,
-                               http_port,
-                               8080),
-    cowboy:start_clear(?LISTENER_REF,
-                       [{port, Port}],
-                       #{env => #{dispatch => Dispatch},
-                         %% 15 minute idle timeout for long-running LLM streams
-                         idle_timeout => 900000}).
+    Port = application:get_env(
+        don_erleone,
+        http_port,
+        8080
+    ),
+    cowboy:start_clear(
+        ?LISTENER_REF,
+        [{port, Port}],
+        #{
+            env => #{dispatch => Dispatch},
+            %% 15 minute idle timeout for long-running LLM streams
+            idle_timeout => 900000
+        }
+    ).
 
 -spec build_dispatch_rules() -> term().
 
 build_dispatch_rules() ->
-    cowboy_router:compile([{'_',
-                            [{"/v1/chat/completions", de_openai_handler, []},
-                             {"/v1/models", de_openai_models_handler, []},
-                             {"/health", de_health_handler, []}]}]).
+    cowboy_router:compile([
+        {'_', [
+            {"/v1/chat/completions", de_openai_handler, []},
+            {"/v1/models", de_openai_models_handler, []},
+            {"/health", de_health_handler, []}
+        ]}
+    ]).
 
 %% =============================================================================
 %% Standard Callbacks
 %% =============================================================================
 
--spec handle_call(term(), {pid(), term()},
-                  state()) -> {reply, term(), state()}.
+-spec handle_call(
+    term(),
+    {pid(), term()},
+    state()
+) -> {reply, term(), state()}.
 
 handle_call(_Req, _From, State) -> {reply, ok, State}.
 
--spec handle_cast(term(), state()) -> {noreply,
-                                       state()}.
+-spec handle_cast(term(), state()) -> {noreply, state()}.
 
 handle_cast(_Msg, State) -> {noreply, State}.
 
--spec handle_info(term(), state()) -> {noreply,
-                                       state()}.
+-spec handle_info(term(), state()) -> {noreply, state()}.
 
 handle_info(_Msg, State) -> {noreply, State}.

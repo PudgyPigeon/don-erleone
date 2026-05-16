@@ -19,8 +19,7 @@ any_to_int(V) when is_integer(V) -> V;
 any_to_int(V) when is_atom(V) ->
     any_to_int(atom_to_list(V)).
 
--spec parse_url(string() | binary()) -> {string(),
-                                         integer(), string()}.
+-spec parse_url(string() | binary()) -> {string(), integer(), string()}.
 
 parse_url(URL) ->
     Parsed = uri_string:parse(to_list(URL)),

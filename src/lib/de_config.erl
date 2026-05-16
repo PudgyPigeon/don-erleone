@@ -3,41 +3,49 @@
 
 -module(de_config).
 
--export([load_main_config/0,
-         load_sub_agent_config/0,
-         get_system_prompt/0,
-         get_env_string/2,
-         get_env_integer/2]).
+-export([
+    load_main_config/0,
+    load_sub_agent_config/0,
+    get_system_prompt/0,
+    get_env_string/2,
+    get_env_integer/2
+]).
 
 %% Accessors for config()
--export([config_ollama_url/1,
-         config_model/1,
-         config_timeout/1,
-         config_stream/1,
-         config_system_prompt/1]).
+-export([
+    config_ollama_url/1,
+    config_model/1,
+    config_timeout/1,
+    config_stream/1,
+    config_system_prompt/1
+]).
 
 %% Accessors for sub_config()
--export([sub_config_ollama_url/1,
-         sub_config_mcp_url/1,
-         sub_config_model/1,
-         sub_config_timeout/1,
-         sub_config_max_steps/1]).
+-export([
+    sub_config_ollama_url/1,
+    sub_config_mcp_url/1,
+    sub_config_model/1,
+    sub_config_timeout/1,
+    sub_config_max_steps/1
+]).
 
 -export_type([config/0, sub_config/0]).
 
--record(config,
-        {ollama_url :: string(),
-         model :: string(),
-         timeout :: integer(),
-         stream :: boolean(),
-         system_prompt :: binary()}).
+-record(config, {
+    ollama_url :: string(),
+    model :: string(),
+    timeout :: integer(),
+    stream :: boolean(),
+    system_prompt :: binary()
+}).
 
--record(sub_config,
-        {ollama_url :: string(),
-         mcp_url :: string(),
-         model :: string(),
-         timeout :: integer(),
-         max_steps :: integer()}).
+-record(sub_config, {
+    ollama_url :: string(),
+    mcp_url :: string(),
+    model :: string(),
+    timeout :: integer(),
+    max_steps :: integer()
+}).
 
 -type config() :: #config{}.
 
@@ -50,48 +58,59 @@
 -spec load_main_config() -> config().
 
 load_main_config() ->
-    #config{ollama_url =
-                get_env_string(ollama_url,
-                               "http://localhost:11434/api/generate"),
-            model = get_env_string(ollama_model, "qwen3.5:9b"),
-            timeout = get_env_integer(timeout, 3600000),
-            stream = false, system_prompt = get_system_prompt()}.
+    #config{
+        ollama_url =
+            get_env_string(
+                ollama_url,
+                "http://localhost:11434/api/generate"
+            ),
+        model = get_env_string(ollama_model, "qwen3.5:9b"),
+        timeout = get_env_integer(timeout, 3600000),
+        stream = false,
+        system_prompt = get_system_prompt()
+    }.
 
 -spec load_sub_agent_config() -> sub_config().
 
 load_sub_agent_config() ->
-    #sub_config{ollama_url =
-                    get_env_string(ollama_url,
-                                   "http://localhost:11434/api/generate"),
-                model = get_env_string(sub_model, "qwen3.5:9b"),
-                timeout = get_env_integer(sub_timeout, 120000),
-                max_steps = get_env_integer(sub_max_steps, 10),
-                mcp_url =
-                    get_env_string(mcp_url, "http://localhost:30090/mcp")}.
+    #sub_config{
+        ollama_url =
+            get_env_string(
+                ollama_url,
+                "http://localhost:11434/api/generate"
+            ),
+        model = get_env_string(sub_model, "qwen3.5:9b"),
+        timeout = get_env_integer(sub_timeout, 120000),
+        max_steps = get_env_integer(sub_max_steps, 10),
+        mcp_url =
+            get_env_string(mcp_url, "http://localhost:30090/mcp")
+    }.
 
 -spec get_system_prompt() -> binary().
 
 get_system_prompt() ->
-    <<"You are the Consigliere, the high-level "
-      "controller of the Don Erleone SRE infrastruct"
-      "ure.\nYou delegate technical execution "
-      "to your Caporegimes (autonomous agents).\n\nC"
-      "RITICAL INSTRUCTIONS:\n1. For ANY task "
-      "involving Kubernetes, Nix, or Infrastructure "
-      "investigation, use tool_intent: 'autonomous'.\n"
-      "2. Do not attempt to solve technical "
-      "cluster issues yourself. Delegate them.\n3. "
-      "You do not need to specify exact tool "
-      "names; the Caporegime will discover "
-      "them via the Haskell MCP.\n4. If a user "
-      "asks for a 'deploy', 'query', or 'debug', "
-      "use the 'autonomous' intent.\n5. Output "
-      "STRICT JSON only.\n\nFORMAT:\n{\n  \"reasonin"
-      "g\": \"Why you are delegating\",\n  "
-      "\"response\": \"Message to the user "
-      "about the mission start\",\n  \"delegate_requ"
-      "ired\": true,\n  \"tool_intent\": \"autonomou"
-      "s\",\n  \"mcp_args\": {} \n}">>.
+    <<
+        "You are the Consigliere, the high-level "
+        "controller of the Don Erleone SRE infrastruct"
+        "ure.\nYou delegate technical execution "
+        "to your Caporegimes (autonomous agents).\n\nC"
+        "RITICAL INSTRUCTIONS:\n1. For ANY task "
+        "involving Kubernetes, Nix, or Infrastructure "
+        "investigation, use tool_intent: 'autonomous'.\n"
+        "2. Do not attempt to solve technical "
+        "cluster issues yourself. Delegate them.\n3. "
+        "You do not need to specify exact tool "
+        "names; the Caporegime will discover "
+        "them via the Haskell MCP.\n4. If a user "
+        "asks for a 'deploy', 'query', or 'debug', "
+        "use the 'autonomous' intent.\n5. Output "
+        "STRICT JSON only.\n\nFORMAT:\n{\n  \"reasonin"
+        "g\": \"Why you are delegating\",\n  "
+        "\"response\": \"Message to the user "
+        "about the mission start\",\n  \"delegate_requ"
+        "ired\": true,\n  \"tool_intent\": \"autonomou"
+        "s\",\n  \"mcp_args\": {} \n}"
+    >>.
 
 %% =============================================================================
 %% Accessors
@@ -151,7 +170,8 @@ get_env_string(Key, Default) ->
                 {ok, Val} -> de_utils:to_list(Val);
                 _ -> Default
             end;
-        Val -> Val
+        Val ->
+            Val
     end.
 
 -spec get_env_integer(atom(), integer()) -> integer().
@@ -163,9 +183,18 @@ get_env_integer(Key, Default) ->
             case application:get_env(don_erleone, Key) of
                 {ok, Val} when is_integer(Val) -> Val;
                 {ok, Val} ->
-                    try de_utils:any_to_int(Val) catch _:_ -> Default end;
-                _ -> Default
+                    try
+                        de_utils:any_to_int(Val)
+                    catch
+                        _:_ -> Default
+                    end;
+                _ ->
+                    Default
             end;
         Val ->
-            try de_utils:any_to_int(Val) catch _:_ -> Default end
+            try
+                de_utils:any_to_int(Val)
+            catch
+                _:_ -> Default
+            end
     end.

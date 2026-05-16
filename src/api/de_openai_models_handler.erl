@@ -5,18 +5,25 @@
 
 -export([init/2]).
 
--spec init(cowboy_req:req(), term()) -> {ok,
-                                         cowboy_req:req(), term()}.
+-spec init(cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 
 init(Req0, State) ->
-    Models = [#{<<"id">> => <<"de_consigliere">>,
-                <<"object">> => <<"model">>,
-                <<"created">> => 1677610602,
-                <<"owned_by">> => <<"don-erleone">>}],
-    RespBody = jsx:encode(#{<<"object">> => <<"list">>,
-                            <<"data">> => Models}),
-    Req = cowboy_req:reply(200,
-                           #{<<"content-type">> => <<"application/json">>},
-                           RespBody,
-                           Req0),
+    Models = [
+        #{
+            <<"id">> => <<"de_consigliere">>,
+            <<"object">> => <<"model">>,
+            <<"created">> => 1677610602,
+            <<"owned_by">> => <<"don-erleone">>
+        }
+    ],
+    RespBody = jsx:encode(#{
+        <<"object">> => <<"list">>,
+        <<"data">> => Models
+    }),
+    Req = cowboy_req:reply(
+        200,
+        #{<<"content-type">> => <<"application/json">>},
+        RespBody,
+        Req0
+    ),
     {ok, Req, State}.

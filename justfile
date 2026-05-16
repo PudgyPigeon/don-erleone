@@ -53,7 +53,7 @@ test:
 
 [group: 'check']
 fmt:
-    rebar3 format src/
+    erlfmt -w "src/**/*.erl"
 
 [group: 'check']
 ci: fmt
