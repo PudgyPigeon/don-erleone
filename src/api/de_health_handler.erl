@@ -5,13 +5,13 @@
 
 -export([init/2]).
 
--spec init(cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
+-spec init(cowboy_req:req(), term()) -> {ok,
+                                         cowboy_req:req(), term()}.
+
 init(Req0, State) ->
-  Body = jsx:encode(#{<<"status">> => <<"ok">>}),
-  Req = cowboy_req:reply(
-    200,
-    #{<<"content-type">> => <<"application/json">>},
-    Body,
-    Req0
-  ),
-  {ok, Req, State}.
+    Body = jsx:encode(#{<<"status">> => <<"ok">>}),
+    Req = cowboy_req:reply(200,
+                           #{<<"content-type">> => <<"application/json">>},
+                           Body,
+                           Req0),
+    {ok, Req, State}.

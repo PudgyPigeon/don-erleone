@@ -53,7 +53,7 @@ test:
 
 [group: 'check']
 fmt:
-    rebar3 format
+    rebar3 format src/
 
 [group: 'check']
 ci: fmt

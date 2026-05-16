@@ -1,10 +1,17 @@
 %% SPDX-License-Identifier: AGPL-3.0-or-later
 %% Copyright (C) 2026 Tommy (Thae Hyun) Nam <tommynam1994@gmail.com>
 
-{application, don_erleone,
- [{description, "Don Erleone - Agentic Brain Orchestrator"},
+{application,
+ don_erleone,
+ [{description,
+   "Don Erleone - Agentic Brain Orchestrator"},
   {vsn, "0.1.0"},
-  {registered, [don_erleone, de_front, de_underboss, de_caporegime_pool, de_commission]},
+  {registered,
+   [don_erleone,
+    de_front,
+    de_underboss,
+    de_caporegime_pool,
+    de_commission]},
   {mod, {de_app, []}},
   {applications,
    [kernel,
@@ -16,7 +23,8 @@
     crypto,
     ssl,
     gun,
-    telemetry
-   ]},
+    telemetry]},
   {env, []},
-  {modules, []}]}.
+  {modules, []}]}
+
+.
