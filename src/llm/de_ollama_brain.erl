@@ -35,21 +35,25 @@ build_payload(Model, Prompt, Context, System, Stream, Tools, Path) ->
   end,
   jsx:encode(maybe_add_tools(Payload, Tools)).
 
+-spec extract_context_ids(list()) -> list().
 extract_context_ids([]) -> [];
-extract_context_ids([H | _] = Ctx) when is_map(H) -> 
+extract_context_ids([H | _] = _Ctx) when is_map(H) -> 
   %% /api/generate expects integers. If we have maps (chat history), drop them to avoid 400 errors.
   [];
 extract_context_ids(Ctx) when is_list(Ctx) -> Ctx;
 extract_context_ids(_) -> [].
 
+-spec build_messages(binary(), list(), binary()) -> list().
 build_messages(System, Context, Prompt) ->
   Msgs = maybe_add_system(to_bin(System), Context),
   maybe_add_user(to_bin(Prompt), Msgs).
 
+-spec maybe_add_system(binary(), list()) -> list().
 maybe_add_system(<<>>, Context) -> Context;
-maybe_add_system(S, [#{<<"role">> := <<"system">>} | _] = Context) -> Context;
+maybe_add_system(_S, [#{<<"role">> := <<"system">>} | _] = Context) -> Context;
 maybe_add_system(S, Context) -> [#{<<"role">> => <<"system">>, <<"content">> => S} | Context].
 
+-spec maybe_add_user(binary(), list()) -> list().
 maybe_add_user(<<>>, Messages) -> Messages;
 maybe_add_user(P, Messages) -> Messages ++ [#{<<"role">> => <<"user">>, <<"content">> => P}].
 
@@ -76,6 +80,7 @@ accumulate(AccMap, #{<<"message">> := NewMsg}, CB) when is_map(AccMap) ->
 accumulate(_Acc, Msg, _CB) ->
   Msg.
 
+-spec merge_messages(map(), map()) -> map().
 merge_messages(Old, New) ->
   Merged = maps:merge(Old, New),
   Merged#{
@@ -83,34 +88,41 @@ merge_messages(Old, New) ->
     <<"tool_calls">> => merge_tool_calls(maps:get(<<"tool_calls">>, Old, []), maps:get(<<"tool_calls">>, New, []))
   }.
 
+-spec merge_tool_calls(list(), list()) -> list().
 merge_tool_calls(Old, New) ->
   case {is_indexable(Old), is_indexable(New)} of
     {true, true} -> perform_index_merge(Old, New);
     _ -> Old ++ New
   end.
 
+-spec is_indexable(list()) -> boolean().
 is_indexable(L) ->
   lists:all(fun(I) -> is_map(I) andalso maps:is_key(<<"index">>, I) end, L).
 
+-spec perform_index_merge(list(), list()) -> list().
 perform_index_merge(Old, New) ->
   OldMap = to_index_map(Old),
   NewMap = to_index_map(New),
   Indices = lists:usort(maps:keys(OldMap) ++ maps:keys(NewMap)),
   [merge_call(maps:get(I, OldMap, undefined), maps:get(I, NewMap, undefined)) || I <- Indices].
 
+-spec to_index_map(list()) -> map().
 to_index_map(L) ->
   maps:from_list([{maps:get(<<"index">>, C, 0), C} || C <- L]).
 
+-spec merge_call(map() | undefined, map() | undefined) -> map().
 merge_call(undefined, New) -> New;
 merge_call(Old, undefined) -> Old;
 merge_call(Old, New) ->
   Merged = maps:merge(Old, New),
   Merged#{<<"function">> => merge_function(maps:get(<<"function">>, Old, #{}), maps:get(<<"function">>, New, #{}))}.
 
+-spec merge_function(map(), map()) -> map().
 merge_function(Old, New) ->
   Merged = maps:merge(Old, New),
   Merged#{<<"arguments">> => <<(maps:get(<<"arguments">>, Old, <<>>))/binary, (maps:get(<<"arguments">>, New, <<>>))/binary>>}.
 
+-spec get_msg_content(map()) -> binary().
 get_msg_content(#{<<"message">> := #{<<"content">> := C}}) -> C;
 get_msg_content(_) -> <<>>.
 
@@ -118,9 +130,11 @@ get_msg_content(_) -> <<>>.
 %% Helpers
 %% =============================================================================
 
+-spec maybe_add_tools(map(), list()) -> map().
 maybe_add_tools(Payload, []) -> Payload;
 maybe_add_tools(Payload, Tools) -> Payload#{<<"tools">> => Tools}.
 
+-spec maybe_callback(function() | undefined, binary()) -> ok.
 maybe_callback(undefined, _) -> ok;
 maybe_callback(CB, Content) -> CB(Content).
 

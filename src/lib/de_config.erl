@@ -104,16 +104,34 @@ get_system_prompt() ->
 %% Accessors
 %% =============================================================================
 
+-spec config_ollama_url(config()) -> string().
 config_ollama_url(#config{ollama_url = V}) -> V.
+
+-spec config_model(config()) -> string().
 config_model(#config{model = V}) -> V.
+
+-spec config_timeout(config()) -> integer().
 config_timeout(#config{timeout = V}) -> V.
+
+-spec config_stream(config()) -> boolean().
 config_stream(#config{stream = V}) -> V.
+
+-spec config_system_prompt(config()) -> binary().
 config_system_prompt(#config{system_prompt = V}) -> V.
 
+-spec sub_config_ollama_url(sub_config()) -> string().
 sub_config_ollama_url(#sub_config{ollama_url = V}) -> V.
+
+-spec sub_config_mcp_url(sub_config()) -> string().
 sub_config_mcp_url(#sub_config{mcp_url = V}) -> V.
+
+-spec sub_config_model(sub_config()) -> string().
 sub_config_model(#sub_config{model = V}) -> V.
+
+-spec sub_config_timeout(sub_config()) -> integer().
 sub_config_timeout(#sub_config{timeout = V}) -> V.
+
+-spec sub_config_max_steps(sub_config()) -> integer().
 sub_config_max_steps(#sub_config{max_steps = V}) -> V.
 
 %% =============================================================================

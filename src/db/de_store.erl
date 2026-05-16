@@ -63,6 +63,7 @@ init_db() ->
 ensure_table(Name, Def) ->
   handle_create_result(mnesia:create_table(Name, Def), Name).
 
+-spec handle_create_result({atomic, ok} | {aborted, term()}, atom()) -> ok | {error, term()}.
 handle_create_result({atomic, ok}, Name) ->
   logger:info(#{event => table_created, table => Name}),
   mnesia:wait_for_tables([Name], 5000);
@@ -98,6 +99,7 @@ get_mission(Id) ->
 get_latest_context(SessionId) ->
   process_context_read(mnesia:dirty_index_read(mission, SessionId, #mission.session_id)).
 
+-spec process_context_read([mission()]) -> list().
 process_context_read([]) -> [];
 process_context_read(List) ->
   Sorted = sort_by_timestamp(List),
@@ -142,6 +144,7 @@ execute_write(Record, Id) ->
   Result = mnesia:transaction(fun() -> mnesia:write(Record) end),
   handle_write_result(handle_transaction(Result, Id), Id).
 
+-spec handle_write_result(ok | {error, term()}, integer()) -> {ok, integer()} | {error, term()}.
 handle_write_result(ok, Id) -> {ok, Id};
 handle_write_result(Error, _Id) -> Error.
 
@@ -150,6 +153,7 @@ execute_read(Id) ->
   Result = mnesia:transaction(fun() -> mnesia:read(mission, Id) end),
   handle_read_result(handle_transaction(Result, Id)).
 
+-spec handle_read_result(list() | {error, term()}) -> {ok, mission()} | {error, term()}.
 handle_read_result([Result]) -> {ok, Result};
 handle_read_result([]) -> {error, not_found};
 handle_read_result(Error) -> Error.

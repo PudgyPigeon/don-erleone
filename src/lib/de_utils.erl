@@ -29,5 +29,6 @@ parse_url(URL) ->
   Path = maps:get(path, Parsed, "/"),
   {Host, Port, Path}.
 
+-spec default_port(string()) -> integer().
 default_port("https") -> 443;
 default_port(_) -> 80.

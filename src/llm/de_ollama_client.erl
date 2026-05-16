@@ -10,19 +10,31 @@
   handle_stream_event/4
 ]).
 
+-type context() :: #{
+  conn := pid(),
+  ref := reference(),
+  host := string(),
+  tmo := integer(),
+  is_stream := boolean(),
+  cb := function() | undefined
+}.
+
 %% =============================================================================
 %% API
 %% =============================================================================
 
+-spec generate(binary(), binary(), list(), map()) -> {ok, map()} | {error, term()}.
 generate(Prompt, System, Context, Opts) ->
   generate(Prompt, System, Context, [], Opts).
 
+-spec generate(binary(), binary(), list(), list(), map()) -> {ok, map()} | {error, term()}.
 generate(Prompt, System, Context, Tools, Opts) ->
   URL = maps:get(url, Opts),
   {Host, Port, Path} = de_utils:parse_url(URL),
   Payload = de_ollama_brain:build_payload(maps:get(model, Opts), Prompt, Context, System, maps:get(stream, Opts, false), Tools, Path),
   open_and_call(Host, Port, Path, Payload, Opts).
 
+-spec generate_with_tools(binary(), binary(), list(), list(), map()) -> {ok, map()} | {error, term()}.
 generate_with_tools(Prompt, System, Context, Tools, Opts) ->
   generate(Prompt, System, Context, Tools, Opts).
 
@@ -30,6 +42,7 @@ generate_with_tools(Prompt, System, Context, Tools, Opts) ->
 %% HTTP Client (Gun)
 %% =============================================================================
 
+-spec open_and_call(string(), integer(), string(), binary(), map()) -> {ok, map()} | {error, term()}.
 open_and_call(Host, Port, Path, Payload, Opts) ->
   case gun:open(Host, Port) of
     {ok, Conn} ->
@@ -39,6 +52,7 @@ open_and_call(Host, Port, Path, Payload, Opts) ->
       {error, {connection_failed, Reason}}
   end.
 
+-spec perform_call(pid(), string(), string(), binary(), map()) -> {ok, map()} | {error, term()}.
 perform_call(Conn, Host, Path, Payload, Opts) ->
   Ref = gun:post(Conn, Path, [{<<"content-type">>, <<"application/json">>}], Payload),
   Ctx = build_context(Conn, Ref, Host, Opts),
@@ -46,6 +60,7 @@ perform_call(Conn, Host, Path, Payload, Opts) ->
   gun:close(Conn),
   Result.
 
+-spec build_context(pid(), reference(), string(), map()) -> context().
 build_context(Conn, Ref, Host, Opts) ->
   #{
     conn => Conn,
@@ -56,6 +71,7 @@ build_context(Conn, Ref, Host, Opts) ->
     cb => maps:get(callback, Opts, undefined)
   }.
 
+-spec message_loop(context(), binary(), term()) -> {ok, map()} | {error, term()}.
 message_loop(#{tmo := Tmo, host := Host} = Ctx, Buffer, Acc) ->
   receive
     Msg -> dispatch(handle_stream_event(Msg, Ctx, Buffer, Acc), Ctx)
@@ -63,6 +79,8 @@ message_loop(#{tmo := Tmo, host := Host} = Ctx, Buffer, Acc) ->
     handle_timeout(Host, Tmo)
   end.
 
+-spec dispatch({next, binary(), term()} | {ok, map()} | {error, term()}, context()) ->
+  {ok, map()} | {error, term()}.
 dispatch({next, B, A}, Ctx) -> message_loop(Ctx, B, A);
 dispatch({ok, Result}, _) -> {ok, Result};
 dispatch({error, Reason}, _) -> {error, Reason}.
@@ -71,6 +89,8 @@ dispatch({error, Reason}, _) -> {error, Reason}.
 %% Event Handlers (Pure Directives)
 %% =============================================================================
 
+-spec handle_stream_event(term(), context(), binary(), term()) ->
+  {next, binary(), term()} | {ok, map()} | {error, term()}.
 handle_stream_event({gun_response, C, R, IsFin, Status, _Headers}, #{conn := C, ref := R} = Ctx, B, A) ->
   handle_status(Status, IsFin, Ctx, B, A);
 handle_stream_event({gun_data, C, R, nofin, Data}, #{conn := C, ref := R} = Ctx, Buffer, Acc) ->
@@ -100,12 +120,14 @@ handle_status(Status, _IsFin, _Ctx, _B, _A) -> {error, {http_status, Status}}.
 %% Data Logic Dispatch
 %% =============================================================================
 
+-spec handle_data(context(), binary(), term()) -> {next, binary(), term()}.
 handle_data(#{is_stream := true} = Ctx, Buffer, Acc) ->
   {NextBuf, NewAcc} = de_ollama_client_logic:process_ndjson(Buffer, Acc, maps:get(cb, Ctx)),
   {next, NextBuf, NewAcc};
 handle_data(#{is_stream := false}, Buffer, Acc) ->
   {next, Buffer, Acc}.
 
+-spec handle_final_data(binary(), context(), term()) -> {ok, map()} | {error, term()}.
 handle_final_data(FinalBody, #{is_stream := true, cb := CB}, Acc) ->
   {Remainder, TempAcc} = de_ollama_client_logic:process_ndjson(FinalBody, Acc, CB),
   {ok, extract_message(de_ollama_client_logic:finalize(Remainder, TempAcc, CB))};
@@ -119,9 +141,11 @@ handle_final_data(FinalBody, #{is_stream := false, cb := CB}, Acc) ->
 %% Utilities
 %% =============================================================================
 
+-spec extract_message(map()) -> map().
 extract_message(#{<<"message">> := Msg}) -> Msg;
 extract_message(Msg) -> Msg.
 
+-spec handle_timeout(string(), integer()) -> {error, timeout}.
 handle_timeout(Host, Tmo) ->
   logger:error(#{event => ollama_request_timeout, host => Host, timeout => Tmo}),
   {error, timeout}.

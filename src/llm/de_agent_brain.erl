@@ -46,11 +46,13 @@ analyze_loop_step(Msg) ->
   Content = extract_content(Msg),
   evaluate_content(Content).
 
+-spec evaluate_content(binary()) -> {stop, binary()}.
 evaluate_content(<<>>) ->
   {stop, <<"Mission complete or no further action required.">>};
 evaluate_content(Content) ->
   {stop, Content}.
 
+-spec extract_content(map()) -> binary().
 extract_content(Msg) ->
   maps:get(<<"content stream">>, Msg, maps:get(<<"content">>, Msg, <<>>)).
 
@@ -61,6 +63,7 @@ decode_tools(Body) ->
     {error, _} = Err -> Err
   end.
 
+-spec safe_decode(term()) -> {ok, map()} | {error, json_invalid}.
 safe_decode(Body) ->
   try
     {ok, jsx:decode(to_bin(Body), [return_maps])}
@@ -68,6 +71,7 @@ safe_decode(Body) ->
     _:_ -> {error, json_invalid}
   end.
 
+-spec extract_tools_list(map()) -> {ok, list()} | {error, term()}.
 extract_tools_list(#{<<"result">> := #{<<"tools">> := Tools}}) -> {ok, Tools};
 extract_tools_list(#{<<"tools">> := Tools}) -> {ok, Tools};
 extract_tools_list(Other) -> {error, {bad_structure, Other}}.
@@ -87,6 +91,7 @@ build_sub_prompt(Intent, Goal, Tools) ->
     "INTENT: ", Intent
   ].
 
+-spec format_tool_names(list()) -> iolist().
 format_tool_names(Tools) ->
   Names = [maps:get(<<"name">>, T) || T <- Tools],
   lists:join(<<", ">>, Names).

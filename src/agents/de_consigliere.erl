@@ -43,16 +43,19 @@ async_pool_consult(SessionId, Prompt, CowboyFrom) ->
       handle_consult_fault(Class, Reason, Stack, SessionId, CowboyFrom, StartTime)
   end.
 
+-spec execute_transaction(binary(), binary(), {pid(), reference()}) -> term().
 execute_transaction(SessionId, Prompt, CowboyFrom) ->
   poolboy:transaction(de_consigliere_pool, fun(Worker) ->
     de_consigliere_worker:consult(Worker, SessionId, Prompt, CowboyFrom)
   end).
 
+-spec report_success(binary(), integer()) -> ok.
 report_success(SessionId, StartTime) ->
   telemetry:execute([don_erleone, worker, execute, stop],
     #{duration => erlang:system_time(microsecond) - StartTime},
     #{session_id => SessionId, pool => de_consigliere_pool}).
 
+-spec handle_consult_fault(atom(), term(), list(), binary(), {pid(), reference()}, integer()) -> ok.
 handle_consult_fault(exit, {timeout, _}, _Stack, Sid, From, Start) ->
   report_exception(Sid, pool_timeout, exit, Start),
   notify_client_of_failure(From, pool_overloaded);
@@ -67,6 +70,7 @@ handle_consult_fault(Class, Reason, Stack, Sid, From, Start) ->
   }),
   notify_client_of_failure(From, internal_service_error).
 
+-spec report_exception(binary(), term(), atom(), integer()) -> ok.
 report_exception(Sid, Reason, Class, Start) ->
   telemetry:execute([don_erleone, worker, execute, exception],
     #{duration => erlang:system_time(microsecond) - Start},

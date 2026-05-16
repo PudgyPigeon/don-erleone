@@ -26,6 +26,7 @@ process_ndjson(Buffer, Acc, CB) ->
 finalize(Line, Acc, CB) ->
   handle_line_decode(de_ollama_brain:decode_line(Line), Acc, CB).
 
+-spec handle_line_decode({ok, map()} | {error, term()} | skip, term(), function() | undefined) -> term().
 handle_line_decode({ok, Msg}, Acc, CB) ->
   de_ollama_brain:accumulate(Acc, Msg, CB);
 handle_line_decode({error, Reason}, _Acc, _CB) ->

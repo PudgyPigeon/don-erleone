@@ -6,15 +6,16 @@
 
 -export([init/2]).
 
--record(state, {}).
 
 %% =============================================================================
 %% Cowboy Callbacks
 %% =============================================================================
 
+-spec init(cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 init(Req, State) ->
   handle_method(cowboy_req:method(Req), Req, State).
 
+-spec handle_method(binary(), cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 handle_method(<<"POST">>, Req, State) ->
   decode_and_process(Req, State);
 handle_method(_, Req, State) ->
@@ -24,19 +25,23 @@ handle_method(_, Req, State) ->
 %% Request Handling
 %% =============================================================================
 
+-spec decode_and_process(cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 decode_and_process(Req, State) ->
   {ok, Body, Req1} = cowboy_req:read_body(Req),
   process_body(safe_decode(Body), Req1, State).
 
+-spec process_body({ok, map()} | {error, term()}, cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 process_body({ok, Params}, Req, State) ->
   dispatch_mission(Params, Req, State);
 process_body({error, _}, Req, State) ->
   send_error(400, <<"Invalid JSON">>, Req, State).
 
+-spec safe_decode(binary()) -> {ok, map()} | {error, bad_json}.
 safe_decode(Body) ->
   try {ok, jsx:decode(Body, [return_maps])}
   catch _:_ -> {error, bad_json} end.
 
+-spec dispatch_mission(map(), cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 dispatch_mission(Params, Req, State) ->
   Prompt = extract_prompt(Params),
   Sid = maps:get(<<"user">>, Params, <<"default_session">>),
@@ -47,6 +52,7 @@ dispatch_mission(Params, Req, State) ->
   
   execute_by_mode(IsStream, Req, Ref, State).
 
+-spec execute_by_mode(boolean(), cowboy_req:req(), reference(), term()) -> {ok, cowboy_req:req(), term()}.
 execute_by_mode(true, Req, Ref, State) ->
   execute_stream(Req, Ref, State);
 execute_by_mode(false, Req, Ref, State) ->
@@ -56,6 +62,7 @@ execute_by_mode(false, Req, Ref, State) ->
 %% Sync Execution
 %% =============================================================================
 
+-spec execute_sync(cowboy_req:req(), reference(), term()) -> {ok, cowboy_req:req(), term()}.
 execute_sync(Req, Ref, State) ->
   receive
     Msg -> handle_sync_msg(Msg, Ref, Req, State)
@@ -63,6 +70,7 @@ execute_sync(Req, Ref, State) ->
     send_error(504, <<"Gateway Timeout">>, Req, State)
   end.
 
+-spec handle_sync_msg(term(), reference(), cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 handle_sync_msg({Ref, {done, Answer, Mid}}, Ref, Req, State) ->
   reply_json(200, de_openai_formatter:build_success(Answer, Mid), Req, State);
 handle_sync_msg({Ref, {error, Reason}}, Ref, Req, State) ->
@@ -74,6 +82,7 @@ handle_sync_msg(_, _Ref, Req, State) ->
 %% Stream Execution
 %% =============================================================================
 
+-spec execute_stream(cowboy_req:req(), reference(), term()) -> {ok, cowboy_req:req(), term()}.
 execute_stream(Req, Ref, State) ->
   Headers = #{
     <<"content-type">> => <<"text/event-stream">>,
@@ -83,6 +92,7 @@ execute_stream(Req, Ref, State) ->
   stream_loop(Ref, Req1, null),
   {ok, Req1, State}.
 
+-spec stream_loop(reference(), cowboy_req:req(), term()) -> ok.
 stream_loop(Ref, Req, Mid) ->
   receive
     Msg -> handle_stream_event(Msg, Ref, Req, Mid)
@@ -90,6 +100,7 @@ stream_loop(Ref, Req, Mid) ->
     de_openai_formatter:stream_error(Req, timeout, Mid)
   end.
 
+-spec handle_stream_event(term(), reference(), cowboy_req:req(), term()) -> ok.
 handle_stream_event({Ref, {chunk, Content, NewMid}}, Ref, Req, _Mid) ->
   de_openai_formatter:stream_chunk(Req, Content, NewMid),
   stream_loop(Ref, Req, NewMid);
@@ -107,14 +118,17 @@ handle_stream_event(_Unexpected, Ref, Req, Mid) ->
 %% Helpers
 %% =============================================================================
 
+-spec extract_prompt(map()) -> binary().
 extract_prompt(#{<<"messages">> := Msgs}) ->
   maps:get(<<"content">>, lists:last(Msgs), <<>>);
 extract_prompt(_) ->
   <<>>.
 
+-spec reply_json(integer(), binary(), cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 reply_json(Code, Payload, Req, State) ->
   Req1 = cowboy_req:reply(Code, #{<<"content-type">> => <<"application/json">>}, Payload, Req),
   {ok, Req1, State}.
 
+-spec send_error(integer(), binary(), cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 send_error(Code, Msg, Req, State) ->
   reply_json(Code, de_openai_formatter:build_error(Msg), Req, State).
