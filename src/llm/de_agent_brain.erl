@@ -41,7 +41,7 @@ prepare_mcp_request(Method, Params) ->
 %% Priority 1: Tool calls always take precedence if present
 analyze_loop_step(#{<<"tool_calls">> := Calls}) when is_list(Calls), length(Calls) > 0 ->
   {continue, Calls};
-%% Priority 2: Evaluate content
+
 analyze_loop_step(Msg) ->
   Content = extract_content(Msg),
   evaluate_content(Content).
@@ -49,6 +49,7 @@ analyze_loop_step(Msg) ->
 -spec evaluate_content(binary()) -> {stop, binary()}.
 evaluate_content(<<>>) ->
   {stop, <<"Mission complete or no further action required.">>};
+
 evaluate_content(Content) ->
   {stop, Content}.
 
@@ -73,7 +74,9 @@ safe_decode(Body) ->
 
 -spec extract_tools_list(map()) -> {ok, list()} | {error, term()}.
 extract_tools_list(#{<<"result">> := #{<<"tools">> := Tools}}) -> {ok, Tools};
+
 extract_tools_list(#{<<"tools">> := Tools}) -> {ok, Tools};
+
 extract_tools_list(Other) -> {error, {bad_structure, Other}}.
 
 -spec build_sub_prompt(binary(), binary(), list()) -> list().
@@ -98,4 +101,5 @@ format_tool_names(Tools) ->
 
 -spec to_bin(term()) -> binary().
 to_bin(B) when is_binary(B) -> B;
+
 to_bin(V) -> iolist_to_binary(io_lib:format("~p", [V])).

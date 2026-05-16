@@ -18,6 +18,7 @@ init(Req, State) ->
 -spec handle_method(binary(), cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 handle_method(<<"POST">>, Req, State) ->
   decode_and_process(Req, State);
+
 handle_method(_, Req, State) ->
   send_error(405, <<"Method Not Allowed">>, Req, State).
 
@@ -33,6 +34,7 @@ decode_and_process(Req, State) ->
 -spec process_body({ok, map()} | {error, term()}, cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 process_body({ok, Params}, Req, State) ->
   dispatch_mission(Params, Req, State);
+
 process_body({error, _}, Req, State) ->
   send_error(400, <<"Invalid JSON">>, Req, State).
 
@@ -55,6 +57,7 @@ dispatch_mission(Params, Req, State) ->
 -spec execute_by_mode(boolean(), cowboy_req:req(), reference(), term()) -> {ok, cowboy_req:req(), term()}.
 execute_by_mode(true, Req, Ref, State) ->
   execute_stream(Req, Ref, State);
+
 execute_by_mode(false, Req, Ref, State) ->
   execute_sync(Req, Ref, State).
 
@@ -73,8 +76,10 @@ execute_sync(Req, Ref, State) ->
 -spec handle_sync_msg(term(), reference(), cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
 handle_sync_msg({Ref, {done, Answer, Mid}}, Ref, Req, State) ->
   reply_json(200, de_openai_formatter:build_success(Answer, Mid), Req, State);
+
 handle_sync_msg({Ref, {error, Reason}}, Ref, Req, State) ->
   reply_json(200, de_openai_formatter:build_error(Reason), Req, State);
+
 handle_sync_msg(_, _Ref, Req, State) ->
   execute_sync(Req, _Ref, State).
 
@@ -104,13 +109,17 @@ stream_loop(Ref, Req, Mid) ->
 handle_stream_event({Ref, {chunk, Content, NewMid}}, Ref, Req, _Mid) ->
   de_openai_formatter:stream_chunk(Req, Content, NewMid),
   stream_loop(Ref, Req, NewMid);
+
 handle_stream_event({Ref, {done, Content, NewMid}}, Ref, Req, _Mid) ->
   de_openai_formatter:stream_chunk(Req, Content, NewMid),
   de_openai_formatter:stream_done(Req, NewMid);
+
 handle_stream_event({Ref, {error, Reason}}, Ref, Req, Mid) ->
   de_openai_formatter:stream_error(Req, Reason, Mid);
+
 handle_stream_event({'DOWN', _, process, _, Reason}, _Ref, Req, Mid) ->
   de_openai_formatter:stream_error(Req, {process_died, Reason}, Mid);
+
 handle_stream_event(_Unexpected, Ref, Req, Mid) ->
   stream_loop(Ref, Req, Mid).
 
@@ -121,6 +130,7 @@ handle_stream_event(_Unexpected, Ref, Req, Mid) ->
 -spec extract_prompt(map()) -> binary().
 extract_prompt(#{<<"messages">> := Msgs}) ->
   maps:get(<<"content">>, lists:last(Msgs), <<>>);
+
 extract_prompt(_) ->
   <<>>.
 

@@ -70,6 +70,7 @@ execute_consultation(Sid, Prompt, From, State) ->
 handle_ollama_result({ok, Data}, Sid, Prompt, Context, From, State) ->
   Raw = extract_raw(Data),
   process_decision(Sid, Prompt, Raw, Context, From, State);
+
 handle_ollama_result({error, Reason}, Sid, _Prompt, _Context, From, State) ->
   logger:error(#{event => ollama_call_failed, session_id => Sid, error => Reason}),
   notify_error(From, Reason),
@@ -112,6 +113,7 @@ handle_decision({delegate, Intent, Args, Msg}, Sid, Prompt, NewCtx, From, State)
   %% Ensure binary for JSON safety
   BinMsg = iolist_to_binary([<<"\n">>, Msg, <<"\n">>]),
   finalize_decision(Sid, Intent, Prompt, NewCtx, From, State, {chunk, BinMsg}, Args);
+
 handle_decision({direct, Msg}, Sid, Prompt, NewCtx, From, State) ->
   logger:info(#{event => decision_direct, session_id => Sid}),
   finalize_decision(Sid, <<"direct">>, Prompt, NewCtx, From, State, {done, Msg}, undefined).
@@ -128,6 +130,7 @@ finalize_decision(Sid, Intent, Prompt, NewCtx, From, State, MsgData, Args) ->
   {reply, term(), state()}.
 handle_storage_result({ok, Mid}, Sid, Intent, Prompt, From, State, MsgData, Args) ->
   dispatch_result(Sid, From, MsgData, Mid, Intent, Args, Prompt, State);
+
 handle_storage_result({error, Reason}, Sid, _Intent, _Prompt, From, State, _MsgData, _Args) ->
   logger:error(#{event => de_store_failed, session_id => Sid, error => Reason}),
   notify_error(From, Reason),
@@ -139,6 +142,7 @@ handle_storage_result({error, Reason}, Sid, _Intent, _Prompt, From, State, _MsgD
 dispatch_result(_Sid, From, {Tag, Content}, Mid, <<"direct">>, _Args, _Prompt, State) ->
   safe_send(From, {Tag, Content, Mid}),
   {reply, ok, State};
+
 dispatch_result(Sid, From, {Tag, Content}, Mid, Intent, Args, Prompt, State) ->
   safe_send(From, {Tag, Content, Mid}),
   de_underboss:dispatch_mission(#{
@@ -174,6 +178,7 @@ safe_send({Pid, Tag}, Msg) ->
 -spec do_safe_send(boolean(), pid(), reference(), term()) -> ok.
 do_safe_send(true, Pid, Tag, Msg) ->
   Pid ! {Tag, Msg}, ok;
+
 do_safe_send(false, Pid, _Tag, Msg) ->
   logger:warning(#{event => cowboy_dead_drop, target_pid => Pid, message => Msg}), ok.
 
@@ -184,20 +189,26 @@ notify_error({Pid, Tag}, Reason) ->
 -spec do_notify_error(boolean(), pid(), reference(), term()) -> ok.
 do_notify_error(true, Pid, Tag, Reason) ->
   Pid ! {Tag, {error, Reason}}, ok;
+
 do_notify_error(false, _Pid, _Tag, _Reason) ->
   ok.
 
 -spec extract_raw(term()) -> binary().
 extract_raw(Data) when is_list(Data) ->
   extract_raw(iolist_to_binary(Data));
+
 extract_raw(Data) ->
   do_extract_raw(Data).
 
 -spec do_extract_raw(term()) -> binary().
 do_extract_raw(#{<<"message">> := #{<<"content">> := C}}) -> C;
+
 do_extract_raw(#{<<"content">> := C}) -> C;
+
 do_extract_raw(#{<<"response">> := C}) -> C;
+
 do_extract_raw(C) when is_binary(C) -> C;
+
 do_extract_raw(Unknown) ->
   logger:warning(#{event => unknown_ollama_response_format, data => Unknown}),
   <<"error">>.

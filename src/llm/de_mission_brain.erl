@@ -67,4 +67,5 @@ build_new_context(Prompt, Response, Prev) ->
 
 -spec to_bin(term()) -> binary().
 to_bin(B) when is_binary(B) -> B;
+
 to_bin(Any) -> iolist_to_binary(io_lib:format("~p", [Any])).

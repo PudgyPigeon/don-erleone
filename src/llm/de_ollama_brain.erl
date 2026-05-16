@@ -37,10 +37,13 @@ build_payload(Model, Prompt, Context, System, Stream, Tools, Path) ->
 
 -spec extract_context_ids(list()) -> list().
 extract_context_ids([]) -> [];
+
 extract_context_ids([H | _] = _Ctx) when is_map(H) -> 
   %% /api/generate expects integers. If we have maps (chat history), drop them to avoid 400 errors.
   [];
+
 extract_context_ids(Ctx) when is_list(Ctx) -> Ctx;
+
 extract_context_ids(_) -> [].
 
 -spec build_messages(binary(), list(), binary()) -> list().
@@ -50,11 +53,14 @@ build_messages(System, Context, Prompt) ->
 
 -spec maybe_add_system(binary(), list()) -> list().
 maybe_add_system(<<>>, Context) -> Context;
+
 maybe_add_system(_S, [#{<<"role">> := <<"system">>} | _] = Context) -> Context;
+
 maybe_add_system(S, Context) -> [#{<<"role">> => <<"system">>, <<"content">> => S} | Context].
 
 -spec maybe_add_user(binary(), list()) -> list().
 maybe_add_user(<<>>, Messages) -> Messages;
+
 maybe_add_user(P, Messages) -> Messages ++ [#{<<"role">> => <<"user">>, <<"content">> => P}].
 
 %% =============================================================================
@@ -63,6 +69,7 @@ maybe_add_user(P, Messages) -> Messages ++ [#{<<"role">> => <<"user">>, <<"conte
 
 -spec decode_line(binary()) -> {ok, map()} | {error, term()} | skip.
 decode_line(<<>>) -> skip;
+
 decode_line(Line) ->
   try jsx:decode(Line, [return_maps]) of
     #{<<"error">> := Err} -> {error, {ollama_error, Err}};
@@ -73,10 +80,12 @@ decode_line(Line) ->
 accumulate(<<>>, Msg, CB) ->
   maybe_callback(CB, get_msg_content(Msg)),
   Msg;
+
 accumulate(AccMap, #{<<"message">> := NewMsg}, CB) when is_map(AccMap) ->
   OldMsg = maps:get(<<"message">>, AccMap, #{}),
   maybe_callback(CB, maps:get(<<"content">>, NewMsg, <<>>)),
   AccMap#{<<"message">> => merge_messages(OldMsg, NewMsg)};
+
 accumulate(_Acc, Msg, _CB) ->
   Msg.
 
@@ -112,7 +121,9 @@ to_index_map(L) ->
 
 -spec merge_call(map() | undefined, map() | undefined) -> map().
 merge_call(undefined, New) -> New;
+
 merge_call(Old, undefined) -> Old;
+
 merge_call(Old, New) ->
   Merged = maps:merge(Old, New),
   Merged#{<<"function">> => merge_function(maps:get(<<"function">>, Old, #{}), maps:get(<<"function">>, New, #{}))}.
@@ -124,6 +135,7 @@ merge_function(Old, New) ->
 
 -spec get_msg_content(map()) -> binary().
 get_msg_content(#{<<"message">> := #{<<"content">> := C}}) -> C;
+
 get_msg_content(_) -> <<>>.
 
 %% =============================================================================
@@ -132,14 +144,19 @@ get_msg_content(_) -> <<>>.
 
 -spec maybe_add_tools(map(), list()) -> map().
 maybe_add_tools(Payload, []) -> Payload;
+
 maybe_add_tools(Payload, Tools) -> Payload#{<<"tools">> => Tools}.
 
 -spec maybe_callback(function() | undefined, binary()) -> ok.
 maybe_callback(undefined, _) -> ok;
+
 maybe_callback(CB, Content) -> CB(Content).
 
 -spec to_bin(term()) -> binary().
 to_bin(B) when is_binary(B) -> B;
+
 to_bin(L) when is_list(L) -> list_to_binary(L);
+
 to_bin(A) when is_atom(A) -> atom_to_binary(A, utf8);
+
 to_bin(Any) -> iolist_to_binary(io_lib:format("~p", [Any])).

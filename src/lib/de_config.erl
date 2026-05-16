@@ -147,6 +147,7 @@ get_env_string(Key, Default) ->
         {ok, Val} -> de_utils:to_list(Val);
         _ -> Default
       end;
+
     Val -> Val
   end.
 
@@ -161,6 +162,7 @@ get_env_integer(Key, Default) ->
           try de_utils:any_to_int(Val) catch _:_ -> Default end;
         _ -> Default
       end;
+
     Val ->
       try de_utils:any_to_int(Val) catch _:_ -> Default end
   end.

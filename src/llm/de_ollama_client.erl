@@ -82,7 +82,9 @@ message_loop(#{tmo := Tmo, host := Host} = Ctx, Buffer, Acc) ->
 -spec dispatch({next, binary(), term()} | {ok, map()} | {error, term()}, context()) ->
   {ok, map()} | {error, term()}.
 dispatch({next, B, A}, Ctx) -> message_loop(Ctx, B, A);
+
 dispatch({ok, Result}, _) -> {ok, Result};
+
 dispatch({error, Reason}, _) -> {error, Reason}.
 
 %% =============================================================================
@@ -91,29 +93,39 @@ dispatch({error, Reason}, _) -> {error, Reason}.
 
 -spec handle_stream_event(term(), context(), binary(), term()) ->
   {next, binary(), term()} | {ok, map()} | {error, term()}.
+
+%% --- Happy Paths ---
 handle_stream_event({gun_response, C, R, IsFin, Status, _Headers}, #{conn := C, ref := R} = Ctx, B, A) ->
   handle_status(Status, IsFin, Ctx, B, A);
+
 handle_stream_event({gun_data, C, R, nofin, Data}, #{conn := C, ref := R} = Ctx, Buffer, Acc) ->
   handle_data(Ctx, <<Buffer/binary, Data/binary>>, Acc);
+
 handle_stream_event({gun_data, C, R, fin, Data}, #{conn := C, ref := R} = Ctx, Buffer, Acc) ->
   handle_final_data(<<Buffer/binary, Data/binary>>, Ctx, Acc);
+
+%% --- Error Paths ---
 handle_stream_event({gun_error, C, R, Reason}, #{conn := C, ref := R, host := Host}, _B, _A) ->
   logger:error(#{event => ollama_stream_error, host => Host, error => Reason}),
   {error, {stream_err, Reason}};
+
 handle_stream_event({gun_error, C, Reason}, #{conn := C, host := Host}, _B, _A) ->
   logger:error(#{event => ollama_gun_error, host => Host, error => Reason}),
   {error, {gun_err, Reason}};
-handle_stream_event({gun_down, C, _Proto, _Reason, _Killed, _Unprocessed}, #{conn := C, host := Host}, _B, _A) ->
+
+%% Combined gun_down handlers using a generic tuple match with connection verification
+handle_stream_event(GunDown, #{conn := C, host := Host}, _B, _A) 
+  when element(1, GunDown) =:= gun_down, element(2, GunDown) =:= C ->
   logger:error(#{event => ollama_connection_down, host => Host}),
   {error, connection_closed};
-handle_stream_event({gun_down, C, _Proto, _Reason, _Killed}, #{conn := C, host := Host}, _B, _A) ->
-  logger:error(#{event => ollama_connection_down, host => Host}),
-  {error, connection_closed};
+
+%% --- Fallback ---
 handle_stream_event(Unknown, _Ctx, Buffer, Acc) ->
   logger:warning(#{event => unknown_gun_event, msg => Unknown}),
   {next, Buffer, Acc}.
 
 handle_status(200, _IsFin, _Ctx, B, A) -> {next, B, A};
+
 handle_status(Status, _IsFin, _Ctx, _B, _A) -> {error, {http_status, Status}}.
 
 %% =============================================================================
@@ -124,6 +136,7 @@ handle_status(Status, _IsFin, _Ctx, _B, _A) -> {error, {http_status, Status}}.
 handle_data(#{is_stream := true} = Ctx, Buffer, Acc) ->
   {NextBuf, NewAcc} = de_ollama_client_logic:process_ndjson(Buffer, Acc, maps:get(cb, Ctx)),
   {next, NextBuf, NewAcc};
+
 handle_data(#{is_stream := false}, Buffer, Acc) ->
   {next, Buffer, Acc}.
 
@@ -131,6 +144,7 @@ handle_data(#{is_stream := false}, Buffer, Acc) ->
 handle_final_data(FinalBody, #{is_stream := true, cb := CB}, Acc) ->
   {Remainder, TempAcc} = de_ollama_client_logic:process_ndjson(FinalBody, Acc, CB),
   {ok, extract_message(de_ollama_client_logic:finalize(Remainder, TempAcc, CB))};
+
 handle_final_data(FinalBody, #{is_stream := false, cb := CB}, Acc) ->
   case de_ollama_client_logic:finalize(FinalBody, Acc, CB) of
     {error, _} = Err -> Err;
@@ -143,6 +157,7 @@ handle_final_data(FinalBody, #{is_stream := false, cb := CB}, Acc) ->
 
 -spec extract_message(map()) -> map().
 extract_message(#{<<"message">> := Msg}) -> Msg;
+
 extract_message(Msg) -> Msg.
 
 -spec handle_timeout(string(), integer()) -> {error, timeout}.

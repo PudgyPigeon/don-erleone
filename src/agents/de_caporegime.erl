@@ -64,6 +64,7 @@ handle_conn_check({ok, NewState}, Spec) ->
   Result = run_mission(Spec, NewState),
   finalize_mission(Spec, Result),
   {reply, Result, NewState};
+
 handle_conn_check({error, Reason}, Spec) ->
   Mid = maps:get(id, Spec),
   logger:error(#{event => mcp_connection_failed, mission_id => Mid, error => Reason}),
@@ -78,10 +79,12 @@ handle_conn_check({error, Reason}, Spec) ->
 -spec ensure_conn(state() | undefined) -> {ok, state()} | {error, term()}.
 ensure_conn(#de_caporegime_state{conn = Conn} = State) when is_pid(Conn) ->
   check_conn_alive(is_process_alive(Conn), State);
+
 ensure_conn(State) ->
   reconnect(State).
 
 check_conn_alive(true, State) -> {ok, State};
+
 check_conn_alive(false, State) -> reconnect(State).
 
 -spec reconnect(state()) -> {ok, state()} | {error, term()}.
@@ -92,6 +95,7 @@ reconnect(State) ->
 close_old_conn(#de_caporegime_state{conn = OldConn} = State) when is_pid(OldConn) ->
   gun:close(OldConn),
   State#de_caporegime_state{conn = undefined};
+
 close_old_conn(State) ->
   State#de_caporegime_state{conn = undefined}.
 
@@ -102,6 +106,7 @@ establish_mcp_conn(#de_caporegime_state{config = Conf} = State) ->
   handle_gun_open(gun:open(Host, Port, #{connect_timeout => 10000, protocols => [http]}), State).
 -spec handle_gun_open({ok, pid()} | {error, term()}, state()) -> {ok, state()} | {error, term()}.
 handle_gun_open({ok, Conn}, State) -> wait_for_mcp_up(Conn, State);
+
 handle_gun_open({error, Reason}, _State) -> {error, {gun_open_failed, Reason}}.
 
 -spec parse_mcp_url(string()) -> {string(), integer()}.
@@ -117,6 +122,7 @@ wait_for_mcp_up(Conn, State) ->
 handle_await_up({ok, _}, Conn, State) ->
   logger:info(#{event => de_caporegime_connected}),
   {ok, State#de_caporegime_state{conn = Conn}};
+
 handle_await_up({error, Reason}, Conn, _State) ->
   gun:close(Conn),
   {error, {await_up_failed, Reason}}.
@@ -138,6 +144,7 @@ handle_discovery({ok, Tools}, Spec, State) ->
     Tools
   ),
   recursive_loop(Prompt, [], Tools, State, 0);
+
 handle_discovery({error, Reason}, _Spec, _State) ->
   logger:error(#{event => tool_discovery_failed, error => Reason}),
   {error, {infrastructure_down, Reason}}.
@@ -148,6 +155,7 @@ discover_tools(State) ->
 
 -spec handle_tool_list({ok, binary()} | {error, term()}) -> {ok, list()} | {error, term()}.
 handle_tool_list({ok, Body}) -> de_agent_brain:decode_tools(Body);
+
 handle_tool_list(Error) -> Error.
 
 %% =============================================================================
@@ -163,6 +171,7 @@ recursive_loop(Prompt, Context, Tools, State, Step) ->
   {ok, map()} | {error, term()}.
 execute_loop_step(Step, Max, _P, _C, _T, _S) when Step >= Max ->
   {error, recursion_limit};
+
 execute_loop_step(Step, _Max, Prompt, Context, Tools, State) ->
   logger:debug(#{event => de_caporegime_loop_step, step => Step}),
   try
@@ -181,8 +190,9 @@ execute_loop_step(Step, _Max, Prompt, Context, Tools, State) ->
 
 -spec handle_ollama_step({ok, map()} | {error, term()}, list(), list(), state(), integer()) ->
   {ok, map()} | {error, term()}.
-handle_ollama_step({ok, Msg}, Context, Tools, State, Step) ->
-  process_llm_response(Msg, Context, Tools, State, Step);
+handle_ollama_step({ok, Data}, Context, Tools, State, Step) ->
+  process_llm_response(Data, Context, Tools, State, Step);
+
 handle_ollama_step(Error, _Ctx, _Tools, _State, _Step) ->
   logger:error(#{event => de_caporegime_ollama_failed, error => Error}),
   Error.
@@ -197,6 +207,7 @@ handle_loop_decision({continue, Calls}, Msg, Context, Tools, State, Step) ->
   Results = [execute_tool(C, State) || C <- Calls],
   NextCtx = Context ++ [Msg#{<<"role">> => <<"assistant">>} | Results],
   check_continuation(NextCtx, Tools, State, Step + 1);
+
 handle_loop_decision({stop, Response}, _Msg, _Context, _Tools, _State, _Step) ->
   {ok, #{response => Response}}.
 
@@ -208,6 +219,7 @@ check_continuation(_NextCtx, _Tools, State, Step) ->
 -spec decide_continuation(boolean(), list(), list(), state(), integer()) -> {ok, map()} | {error, term()}.
 decide_continuation(true, _Ctx, _T, _S, _Step) ->
   {ok, #{response => <<"I have executed the final tool call. Please check the logs.">>}};
+
 decide_continuation(false, NextCtx, Tools, State, Step) ->
   recursive_loop(<<>>, NextCtx, Tools, State, Step).
 
@@ -234,6 +246,7 @@ execute_tool(#{<<"id">> := Id, <<"function">> := #{<<"name">> := N, <<"arguments
 -spec handle_tool_call({ok, binary()} | {error, term()}, binary(), binary()) -> map().
 handle_tool_call({ok, Res}, Name, Id) ->
   format_tool_response(Name, Id, extract_mcp_result(Res));
+
 handle_tool_call({error, Reason}, Name, Id) ->
   format_tool_response(Name, Id, iolist_to_binary(io_lib:format("Error: ~p", [Reason]))).
 
@@ -253,11 +266,14 @@ safe_jsx_decode(Raw) ->
 
 -spec handle_mcp_decode({ok, term()} | {error, term()}, binary()) -> binary().
 handle_mcp_decode({ok, Decoded}, _Raw) -> parse_mcp_body(Decoded);
+
 handle_mcp_decode({error, _}, Raw) -> Raw.
 
 -spec parse_mcp_body(map() | term()) -> binary() | term().
 parse_mcp_body(#{<<"result">> := #{<<"content">> := List}}) -> parse_content_list(List);
+
 parse_mcp_body(#{<<"error">> := #{<<"message">> := Msg}}) -> [<<"MCP Error: ">>, Msg];
+
 parse_mcp_body(Other) -> Other.
 
 -spec parse_content_list(list()) -> binary().
@@ -287,8 +303,10 @@ await_gun_response(Conn, Ref, Timeout) ->
 -spec handle_gun_await(term(), pid(), reference(), integer()) -> {ok, binary()} | {error, term()}.
 handle_gun_await({response, nofin, 200, _}, Conn, Ref, Timeout) ->
   gun:await_body(Conn, Ref, Timeout);
+
 handle_gun_await({response, _, Status, _}, _Conn, _Ref, _Timeout) ->
   {error, {http_status, Status}};
+
 handle_gun_await(Error, _Conn, _Ref, _Timeout) ->
   {error, Error}.
 
@@ -300,6 +318,7 @@ handle_gun_await(Error, _Conn, _Ref, _Timeout) ->
 finalize_mission(#{id := Mid, cowboy_from := From}, {ok, Data}) ->
   de_store:complete_mission(Mid, Data),
   safe_notify(From, {done, maps:get(response, Data), Mid});
+
 finalize_mission(#{id := Mid, cowboy_from := From, session_id := Sid}, {error, R}) ->
   de_store:fail_mission(Mid, R),
   de_consigliere:handle_system_error(Sid, R, From).
@@ -310,11 +329,14 @@ safe_notify({Pid, Tag}, Msg) ->
 
 -spec do_safe_notify(boolean(), pid(), reference(), term()) -> ok.
 do_safe_notify(true, Pid, Tag, Msg) -> Pid ! {Tag, Msg}, ok;
+
 do_safe_notify(false, _Pid, _Tag, _Msg) -> ok.
 
 -spec to_list(term()) -> string().
 to_list(B) when is_binary(B) -> binary_to_list(B);
+
 to_list(L) when is_list(L) -> L;
+
 to_list(Any) -> lists:flatten(io_lib:format("~s", [Any])).
 
 -spec terminate(term(), state()) -> ok.

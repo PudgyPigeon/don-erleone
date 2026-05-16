@@ -29,7 +29,9 @@ finalize(Line, Acc, CB) ->
 -spec handle_line_decode({ok, map()} | {error, term()} | skip, term(), function() | undefined) -> term().
 handle_line_decode({ok, Msg}, Acc, CB) ->
   de_ollama_brain:accumulate(Acc, Msg, CB);
+
 handle_line_decode({error, Reason}, _Acc, _CB) ->
   {error, Reason};
+
 handle_line_decode(skip, Acc, _CB) ->
   Acc.

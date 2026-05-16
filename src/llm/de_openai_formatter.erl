@@ -89,4 +89,5 @@ build_error(Reason) ->
 
 -spec mission_id_str(term()) -> binary().
 mission_id_str(null) -> <<"null">>;
+
 mission_id_str(Id) -> iolist_to_binary(io_lib:format("~p", [Id])).

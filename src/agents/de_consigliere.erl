@@ -59,6 +59,7 @@ report_success(SessionId, StartTime) ->
 handle_consult_fault(exit, {timeout, _}, _Stack, Sid, From, Start) ->
   report_exception(Sid, pool_timeout, exit, Start),
   notify_client_of_failure(From, pool_overloaded);
+
 handle_consult_fault(Class, Reason, Stack, Sid, From, Start) ->
   report_exception(Sid, Reason, Class, Start),
   logger:error(#{
@@ -89,6 +90,7 @@ notify_client_of_failure({Pid, Tag}, Reason) ->
 safe_notify(true, Pid, Tag, Reason) ->
   Pid ! {Tag, {error, Reason}},
   ok;
+
 safe_notify(false, Pid, _Tag, Reason) ->
   logger:warning(#{
     event => callback_delivery_failed,

@@ -67,8 +67,10 @@ ensure_table(Name, Def) ->
 handle_create_result({atomic, ok}, Name) ->
   logger:info(#{event => table_created, table => Name}),
   mnesia:wait_for_tables([Name], 5000);
+
 handle_create_result({aborted, {already_exists, Name}}, Name) ->
   mnesia:wait_for_tables([Name], 5000);
+
 handle_create_result({aborted, Reason}, Name) ->
   logger:error(#{event => table_creation_failed, table => Name, error => Reason}),
   {error, Reason}.
@@ -101,6 +103,7 @@ get_latest_context(SessionId) ->
 
 -spec process_context_read([mission()]) -> list().
 process_context_read([]) -> [];
+
 process_context_read(List) ->
   Sorted = sort_by_timestamp(List),
   extract_context(hd(Sorted)).
@@ -146,6 +149,7 @@ execute_write(Record, Id) ->
 
 -spec handle_write_result(ok | {error, term()}, integer()) -> {ok, integer()} | {error, term()}.
 handle_write_result(ok, Id) -> {ok, Id};
+
 handle_write_result(Error, _Id) -> Error.
 
 -spec execute_read(integer()) -> {ok, mission()} | {error, term()}.
@@ -155,12 +159,15 @@ execute_read(Id) ->
 
 -spec handle_read_result(list() | {error, term()}) -> {ok, mission()} | {error, term()}.
 handle_read_result([Result]) -> {ok, Result};
+
 handle_read_result([]) -> {error, not_found};
+
 handle_read_result(Error) -> Error.
 
 -spec handle_transaction({atomic, term()} | {aborted, term()}, integer() | undefined) ->
   term() | {error, term()}.
 handle_transaction({atomic, Result}, _Id) -> Result;
+
 handle_transaction({aborted, Reason}, Id) ->
   logger:error(#{event => db_transaction_failed, mission_id => Id, error => Reason}),
   {error, Reason}.
