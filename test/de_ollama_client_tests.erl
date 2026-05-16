@@ -41,7 +41,7 @@ test_stream_events() ->
 test_endpoint_parsing() ->
   [
     ?_assertEqual({"localhost", 11434, "/api/chat"},
-                  de_ollama_client:parse_endpoint("http://localhost:11434/api/chat")),
+                  de_utils:parse_url("http://localhost:11434/api/chat")),
     ?_assertEqual({"ollama", 80, "/api/chat"},
-                  de_ollama_client:parse_endpoint("http://ollama/api/chat"))
+                  de_utils:parse_url("http://ollama/api/chat"))
   ].

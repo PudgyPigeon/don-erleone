@@ -152,7 +152,19 @@ execute_loop_step(Step, Max, _P, _C, _T, _S) when Step >= Max ->
   {error, recursion_limit};
 execute_loop_step(Step, _Max, Prompt, Context, Tools, State) ->
   logger:debug(#{event => de_caporegime_loop_step, step => Step}),
-  handle_ollama_step(call_ollama(Prompt, Context, Tools, State), Context, Tools, State, Step).
+  try
+    handle_ollama_step(call_ollama(Prompt, Context, Tools, State), Context, Tools, State, Step)
+  catch
+    Class:Reason:Stack ->
+      logger:error(#{
+        event => de_caporegime_loop_crash,
+        step => Step,
+        class => Class,
+        reason => Reason,
+        stack => Stack
+      }),
+      {error, {loop_crash, Reason}}
+  end.
 
 handle_ollama_step({ok, Msg}, Context, Tools, State, Step) ->
   process_llm_response(Msg, Context, Tools, State, Step);
@@ -186,24 +198,24 @@ call_ollama(Prompt, Context, Tools, #de_caporegime_state{config = Conf}) ->
     timeout => de_config:sub_config_timeout(Conf),
     stream => false
   },
-  de_ollama_client:generate_with_tools(Prompt, <<>>, Context, Tools, OllamaOpts).
+  de_ollama_client:generate_with_tools(<<>>, Prompt, Context, Tools, OllamaOpts).
 
 
 %% =============================================================================
 %% Tool Execution
 %% =============================================================================
 
-execute_tool(#{<<"function">> := #{<<"name">> := N, <<"arguments">> := A}}, State) ->
+execute_tool(#{<<"id">> := Id, <<"function">> := #{<<"name">> := N, <<"arguments">> := A}}, State) ->
   Params = #{<<"name">> => N, <<"arguments">> => A},
-  handle_tool_call(mcp_call(<<"tools/call">>, Params, State), N).
+  handle_tool_call(mcp_call(<<"tools/call">>, Params, State), N, Id).
 
-handle_tool_call({ok, Res}, Name) ->
-  format_tool_response(Name, extract_mcp_result(Res));
-handle_tool_call({error, Reason}, Name) ->
-  format_tool_response(Name, iolist_to_binary(io_lib:format("Error: ~p", [Reason]))).
+handle_tool_call({ok, Res}, Name, Id) ->
+  format_tool_response(Name, Id, extract_mcp_result(Res));
+handle_tool_call({error, Reason}, Name, Id) ->
+  format_tool_response(Name, Id, iolist_to_binary(io_lib:format("Error: ~p", [Reason]))).
 
-format_tool_response(Name, Content) ->
-  #{<<"role">> => <<"tool">>, <<"name">> => Name, <<"content">> => Content}.
+format_tool_response(Name, Id, Content) ->
+  #{<<"role">> => <<"tool">>, <<"name">> => Name, <<"content">> => Content, <<"tool_call_id">> => Id}.
 
 extract_mcp_result(Raw) ->
   handle_mcp_decode(safe_jsx_decode(Raw), Raw).
@@ -254,9 +266,9 @@ handle_gun_await(Error, _Conn, _Ref, _Timeout) ->
 finalize_mission(#{id := Mid, cowboy_from := From}, {ok, Data}) ->
   de_store:complete_mission(Mid, Data),
   safe_notify(From, {done, maps:get(response, Data), Mid});
-finalize_mission(#{id := Mid, cowboy_from := From}, {error, R}) ->
+finalize_mission(#{id := Mid, cowboy_from := From, session_id := Sid}, {error, R}) ->
   de_store:fail_mission(Mid, R),
-  safe_notify(From, {error, R}).
+  de_consigliere:handle_system_error(Sid, R, From).
 
 safe_notify({Pid, Tag}, Msg) ->
   do_safe_notify(is_process_alive(Pid), Pid, Tag, Msg).

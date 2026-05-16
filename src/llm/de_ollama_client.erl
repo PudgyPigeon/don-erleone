@@ -1,218 +1,127 @@
 %% SPDX-License-Identifier: AGPL-3.0-or-later
 %% Copyright (C) 2026 Tommy (Thae Hyun) Nam <tommynam1994@gmail.com>
 
-%% @doc Shared HTTP client for Ollama API calls via Gun.
 -module(de_ollama_client).
 
 -export([
-  generate/3,
   generate/4,
   generate/5,
-  generate_with_tools/5
+  generate_with_tools/5,
+  handle_stream_event/4
 ]).
-
--ifdef(TEST).
--export([
-  handle_stream_event/4,
-  parse_endpoint/1
-]).
--endif.
 
 %% =============================================================================
 %% API
 %% =============================================================================
 
--spec generate(binary(), binary(), map()) -> {ok, term()} | {error, term()}.
-generate(Prompt, System, Opts) ->
-  generate(Prompt, System, [], Opts, undefined).
-
--spec generate(binary(), binary(), list(), map()) -> {ok, term()} | {error, term()}.
 generate(Prompt, System, Context, Opts) ->
-  generate(Prompt, System, Context, Opts, undefined).
+  generate(Prompt, System, Context, [], Opts).
 
--spec generate(binary(), binary(), list(), map(), function() | undefined) ->
-  {ok, term()} | {error, term()}.
-generate(Prompt, System, Context, Opts, Callback) ->
-  execute_request(Prompt, System, Context, [], Opts, Callback).
-
--spec generate_with_tools(binary(), binary(), list(), list(), map()) ->
-  {ok, term()} | {error, term()}.
-generate_with_tools(Prompt, System, Context, Tools, Opts) ->
-  execute_request(Prompt, System, Context, Tools, Opts, undefined).
-
-%% =============================================================================
-%% Request Flow
-%% =============================================================================
-
-execute_request(Prompt, System, Context, Tools, Opts, Callback) ->
+generate(Prompt, System, Context, Tools, Opts) ->
   URL = maps:get(url, Opts),
-  Model = maps:get(model, Opts),
-  Timeout = maps:get(timeout, Opts, 120000),
-  Stream = maps:get(stream, Opts, false),
+  {Host, Port, Path} = de_utils:parse_url(URL),
+  Payload = de_ollama_brain:build_payload(maps:get(model, Opts), Prompt, Context, System, maps:get(stream, Opts, false), Tools, Path),
+  open_and_call(Host, Port, Path, Payload, Opts).
 
-  Payload = de_ollama_brain:build_payload(Model, Prompt, Context, System, Stream, Tools),
-  Endpoint = resolve_chat_endpoint(URL),
-
-  do_http_call(Endpoint, Payload, Timeout, Stream, Callback).
+generate_with_tools(Prompt, System, Context, Tools, Opts) ->
+  generate(Prompt, System, Context, Tools, Opts).
 
 %% =============================================================================
-%% HTTP Execution
+%% HTTP Client (Gun)
 %% =============================================================================
 
-do_http_call(Endpoint, Payload, Timeout, IsStream, Callback) ->
-  {Host, Port, Path} = parse_endpoint(Endpoint),
-  StartTime = erlang:system_time(microsecond),
-  
-  telemetry:execute([don_erleone, ollama, request, start], #{time => StartTime},
-    #{host => Host, path => Path}),
+open_and_call(Host, Port, Path, Payload, Opts) ->
+  case gun:open(Host, Port) of
+    {ok, Conn} ->
+      {ok, _} = gun:await_up(Conn, 10000),
+      perform_call(Conn, Host, Path, Payload, Opts);
+    {error, Reason} ->
+      {error, {connection_failed, Reason}}
+  end.
 
-  Result = case establish_conn(Host, Port) of
-    {ok, ConnPid} ->
-      execute_with_conn(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host);
-    {error, {Type, Reason}} ->
-      handle_connection_error(Host, Port, Type, Reason)
-  end,
-
-  telemetry:execute([don_erleone, ollama, request, stop],
-    #{duration => erlang:system_time(microsecond) - StartTime},
-    #{host => Host, success => (case Result of {ok, _} -> true; _ -> false end)}),
+perform_call(Conn, Host, Path, Payload, Opts) ->
+  Ref = gun:post(Conn, Path, [{<<"content-type">>, <<"application/json">>}], Payload),
+  Ctx = build_context(Conn, Ref, Host, Opts),
+  Result = message_loop(Ctx, <<>>, <<>>),
+  gun:close(Conn),
   Result.
 
-parse_endpoint(Endpoint) ->
-  URI = uri_string:parse(Endpoint),
-  Host = maps:get(host, URI),
-  Port = maps:get(port, URI, 80),
-  Path = maps:get(path, URI),
-  {Host, Port, Path}.
-
-execute_with_conn(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host) ->
-  try
-    perform_request(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host)
-  after
-    gun:close(ConnPid)
-  end.
-
-handle_connection_error(Host, Port, Type, Reason) ->
-  logger:error(#{
-    event => ollama_connection_failed,
-    host => Host,
-    port => Port,
-    type => Type,
-    error => Reason
-  }),
-  telemetry:execute([don_erleone, ollama, request, error], #{},
-    #{host => Host, reason => Type, error => Reason}),
-  {error, {Type, Reason}}.
-
-establish_conn(Host, Port) ->
-  case gun:open(to_list(Host), Port, #{connect_timeout => 10000, protocols => [http]}) of
-    {ok, ConnPid} -> try_await_up(ConnPid);
-    {error, Reason} -> {error, {open_failed, Reason}}
-  end.
-
-try_await_up(ConnPid) ->
-  try gun:await_up(ConnPid, 10000) of
-    {ok, _} -> {ok, ConnPid};
-    {error, Reason} -> gun:close(ConnPid), {error, {await_up_failed, Reason}}
-  catch
-    _:Error -> gun:close(ConnPid), {error, {await_up_exception, Error}}
-  end.
-
-perform_request(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host) ->
-  Headers = [{<<"content-type">>, <<"application/json">>}],
-  StreamRef = gun:post(ConnPid, Path, Headers, Payload),
-  stream_loop(ConnPid, StreamRef, Timeout, IsStream, <<>>, <<>>, Callback, Host).
-
-%% =============================================================================
-%% Stream Loop
-%% =============================================================================
-
-stream_loop(Conn, Ref, Tmo, IsStream, Buffer, Acc, CB, Host) ->
-  Ctx = #{
+build_context(Conn, Ref, Host, Opts) ->
+  #{
     conn => Conn,
     ref => Ref,
-    tmo => Tmo,
-    is_stream => IsStream,
-    cb => CB,
-    host => Host
-  },
-  message_loop(Ctx, Buffer, Acc).
+    host => Host,
+    tmo => maps:get(timeout, Opts, 30000),
+    is_stream => maps:get(stream, Opts, false),
+    cb => maps:get(callback, Opts, undefined)
+  }.
 
 message_loop(#{tmo := Tmo, host := Host} = Ctx, Buffer, Acc) ->
   receive
-    Msg ->
-      case handle_stream_event(Msg, Ctx, Buffer, Acc) of
-        {next, NewBuffer, NewAcc} -> message_loop(Ctx, NewBuffer, NewAcc);
-        {error, _} = Err -> Err;
-        {ok, _} = Ok -> Ok
-      end
+    Msg -> dispatch(handle_stream_event(Msg, Ctx, Buffer, Acc), Ctx)
   after Tmo ->
     handle_timeout(Host, Tmo)
   end.
 
-handle_stream_event({gun_response, C, R, nofin, 200, _}, #{conn := C, ref := R}, Buffer, Acc) ->
-  {next, Buffer, Acc};
-handle_stream_event({gun_response, C, R, _, Status, _}, #{conn := C, ref := R}, _Buffer, _Acc) when Status >= 400 ->
-  {error, {http_status, Status}};
+dispatch({next, B, A}, Ctx) -> message_loop(Ctx, B, A);
+dispatch({ok, Result}, _) -> {ok, Result};
+dispatch({error, Reason}, _) -> {error, Reason}.
+
+%% =============================================================================
+%% Event Handlers (Pure Directives)
+%% =============================================================================
+
+handle_stream_event({gun_response, C, R, IsFin, Status, _Headers}, #{conn := C, ref := R} = Ctx, B, A) ->
+  handle_status(Status, IsFin, Ctx, B, A);
 handle_stream_event({gun_data, C, R, nofin, Data}, #{conn := C, ref := R} = Ctx, Buffer, Acc) ->
-  #{tmo := Tmo, is_stream := IsStream, cb := CB, host := Host} = Ctx,
-  handle_data(C, R, Tmo, IsStream, <<Buffer/binary, Data/binary>>, Acc, CB, Host);
+  handle_data(Ctx, <<Buffer/binary, Data/binary>>, Acc);
 handle_stream_event({gun_data, C, R, fin, Data}, #{conn := C, ref := R} = Ctx, Buffer, Acc) ->
-  handle_final_data(<<Buffer/binary, Data/binary>>, maps:get(is_stream, Ctx), Acc, maps:get(cb, Ctx));
-handle_stream_event({gun_error, C, R, Reason}, #{conn := C, ref := R, host := Host}, _Buffer, _Acc) ->
+  handle_final_data(<<Buffer/binary, Data/binary>>, Ctx, Acc);
+handle_stream_event({gun_error, C, R, Reason}, #{conn := C, ref := R, host := Host}, _B, _A) ->
   logger:error(#{event => ollama_stream_error, host => Host, error => Reason}),
   {error, {stream_err, Reason}};
-handle_stream_event({gun_error, C, Reason}, #{conn := C, host := Host}, _Buffer, _Acc) ->
+handle_stream_event({gun_error, C, Reason}, #{conn := C, host := Host}, _B, _A) ->
   logger:error(#{event => ollama_gun_error, host => Host, error => Reason}),
   {error, {gun_err, Reason}};
-handle_stream_event({gun_down, C, _, _, _, _}, #{conn := C, host := Host}, _Buffer, _Acc) ->
+handle_stream_event({gun_down, C, _Proto, _Reason, _Killed, _Unprocessed}, #{conn := C, host := Host}, _B, _A) ->
   logger:error(#{event => ollama_connection_down, host => Host}),
   {error, connection_closed};
-handle_stream_event(_Unknown, _Ctx, Buffer, Acc) ->
+handle_stream_event({gun_down, C, _Proto, _Reason, _Killed}, #{conn := C, host := Host}, _B, _A) ->
+  logger:error(#{event => ollama_connection_down, host => Host}),
+  {error, connection_closed};
+handle_stream_event(Unknown, _Ctx, Buffer, Acc) ->
+  logger:warning(#{event => unknown_gun_event, msg => Unknown}),
   {next, Buffer, Acc}.
 
-handle_timeout(Host, Tmo) ->
-  logger:error(#{event => ollama_request_timeout, host => Host, timeout => Tmo}),
-  {error, timeout}.
+handle_status(200, _IsFin, _Ctx, B, A) -> {next, B, A};
+handle_status(Status, _IsFin, _Ctx, _B, _A) -> {error, {http_status, Status}}.
 
-handle_data(Conn, Ref, Tmo, true, Buffer, Acc, CB, Host) ->
-  {NextBuf, NewAcc} = process_ndjson(Buffer, Acc, CB),
-  stream_loop(Conn, Ref, Tmo, true, NextBuf, NewAcc, CB, Host);
-handle_data(Conn, Ref, Tmo, false, Buffer, Acc, CB, Host) ->
-  stream_loop(Conn, Ref, Tmo, false, Buffer, Acc, CB, Host).
+%% =============================================================================
+%% Data Logic Dispatch
+%% =============================================================================
 
-handle_final_data(FinalBody, true, Acc, CB) ->
-  {Remainder, TempAcc} = process_ndjson(FinalBody, Acc, CB),
-  {ok, finalize(Remainder, TempAcc, CB)};
-handle_final_data(FinalBody, false, Acc, CB) ->
-  case finalize(FinalBody, Acc, CB) of
+handle_data(#{is_stream := true} = Ctx, Buffer, Acc) ->
+  {NextBuf, NewAcc} = de_ollama_client_logic:process_ndjson(Buffer, Acc, maps:get(cb, Ctx)),
+  {next, NextBuf, NewAcc};
+handle_data(#{is_stream := false}, Buffer, Acc) ->
+  {next, Buffer, Acc}.
+
+handle_final_data(FinalBody, #{is_stream := true, cb := CB}, Acc) ->
+  {Remainder, TempAcc} = de_ollama_client_logic:process_ndjson(FinalBody, Acc, CB),
+  {ok, extract_message(de_ollama_client_logic:finalize(Remainder, TempAcc, CB))};
+handle_final_data(FinalBody, #{is_stream := false, cb := CB}, Acc) ->
+  case de_ollama_client_logic:finalize(FinalBody, Acc, CB) of
     {error, _} = Err -> Err;
-    Result -> {ok, Result}
-  end.
-
-process_ndjson(Buffer, Acc, CB) ->
-  case binary:split(Buffer, <<"\n">>) of
-    [Line, Rest] ->
-      NewAcc = finalize(Line, Acc, CB),
-      process_ndjson(Rest, NewAcc, CB);
-    [Remainder] ->
-      {Remainder, Acc}
-  end.
-
-finalize(Line, Acc, CB) ->
-  case de_ollama_brain:decode_line(Line) of
-    {ok, Msg} -> de_ollama_brain:accumulate(Acc, Msg, CB);
-    {error, Reason} -> {error, Reason};
-    skip -> Acc
+    Result -> {ok, extract_message(Result)}
   end.
 
 %% =============================================================================
 %% Utilities
 %% =============================================================================
 
-resolve_chat_endpoint(URL) ->
-  L = to_list(URL),
-  lists:flatten(string:replace(L, "/api/generate", "/api/chat")).
+extract_message(#{<<"message">> := Msg}) -> Msg;
+extract_message(Msg) -> Msg.
 
-to_list(B) when is_binary(B) -> binary_to_list(B);
-to_list(L) when is_list(L) -> L.
+handle_timeout(Host, Tmo) ->
+  logger:error(#{event => ollama_request_timeout, host => Host, timeout => Tmo}),
+  {error, timeout}.

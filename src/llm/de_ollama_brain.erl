@@ -4,7 +4,7 @@
 -module(de_ollama_brain).
 
 -export([
-  build_payload/6,
+  build_payload/7,
   decode_line/1,
   accumulate/3,
   to_bin/1
@@ -14,20 +14,44 @@
 %% Payload Construction
 %% =============================================================================
 
--spec build_payload(binary(), binary(), list(), binary(), boolean(), list()) -> binary().
-build_payload(Model, Prompt, Context, System, Stream, Tools) ->
-  Messages = build_messages(System, Context, Prompt),
+-spec build_payload(binary(), binary(), list(), binary(), boolean(), list(), binary()) -> binary().
+build_payload(Model, Prompt, Context, System, Stream, Tools, Path) ->
   Base = #{
     <<"model">> => to_bin(Model),
-    <<"messages">> => Messages,
     <<"stream">> => Stream
   },
-  jsx:encode(maybe_add_tools(Base, Tools)).
+  
+  Payload = case binary:match(to_bin(Path), <<"/api/chat">>) of
+    nomatch ->
+      %% /api/generate format
+      Base#{
+        <<"prompt">> => to_bin(Prompt),
+        <<"system">> => to_bin(System),
+        <<"context">> => extract_context_ids(Context)
+      };
+    _ ->
+      %% /api/chat format
+      Base#{<<"messages">> => build_messages(System, Context, Prompt)}
+  end,
+  jsx:encode(maybe_add_tools(Payload, Tools)).
+
+extract_context_ids([]) -> [];
+extract_context_ids([H | _] = Ctx) when is_map(H) -> 
+  %% /api/generate expects integers. If we have maps (chat history), drop them to avoid 400 errors.
+  [];
+extract_context_ids(Ctx) when is_list(Ctx) -> Ctx;
+extract_context_ids(_) -> [].
 
 build_messages(System, Context, Prompt) ->
-  Sys = case to_bin(System) of <<>> -> []; S -> [#{<<"role">> => <<"system">>, <<"content">> => S}] end,
-  User = case to_bin(Prompt) of <<>> -> []; P -> [#{<<"role">> => <<"user">>, <<"content">> => P}] end,
-  Sys ++ Context ++ User.
+  Msgs = maybe_add_system(to_bin(System), Context),
+  maybe_add_user(to_bin(Prompt), Msgs).
+
+maybe_add_system(<<>>, Context) -> Context;
+maybe_add_system(S, [#{<<"role">> := <<"system">>} | _] = Context) -> Context;
+maybe_add_system(S, Context) -> [#{<<"role">> => <<"system">>, <<"content">> => S} | Context].
+
+maybe_add_user(<<>>, Messages) -> Messages;
+maybe_add_user(P, Messages) -> Messages ++ [#{<<"role">> => <<"user">>, <<"content">> => P}].
 
 %% =============================================================================
 %% Stream Processing
@@ -41,16 +65,54 @@ decode_line(Line) ->
     Msg -> {ok, Msg}
   catch _:_ -> skip end.
 
--spec accumulate(term(), map(), function() | undefined) -> term().
-accumulate(Acc, #{<<"message">> := #{<<"content">> := C} = Msg}, CB) ->
-  maybe_callback(CB, C),
-  case Acc of
-    Prefix when is_binary(Prefix) -> [Prefix, C];
-    Prefix when is_list(Prefix) -> [Prefix, C];
-    _ -> Msg
-  end;
-accumulate(Acc, Msg, _CB) ->
+-spec accumulate(term(), map(), function() | undefined) -> map().
+accumulate(<<>>, Msg, CB) ->
+  maybe_callback(CB, get_msg_content(Msg)),
+  Msg;
+accumulate(AccMap, #{<<"message">> := NewMsg}, CB) when is_map(AccMap) ->
+  OldMsg = maps:get(<<"message">>, AccMap, #{}),
+  maybe_callback(CB, maps:get(<<"content">>, NewMsg, <<>>)),
+  AccMap#{<<"message">> => merge_messages(OldMsg, NewMsg)};
+accumulate(_Acc, Msg, _CB) ->
   Msg.
+
+merge_messages(Old, New) ->
+  Merged = maps:merge(Old, New),
+  Merged#{
+    <<"content">> => <<(maps:get(<<"content">>, Old, <<>>))/binary, (maps:get(<<"content">>, New, <<>>))/binary>>,
+    <<"tool_calls">> => merge_tool_calls(maps:get(<<"tool_calls">>, Old, []), maps:get(<<"tool_calls">>, New, []))
+  }.
+
+merge_tool_calls(Old, New) ->
+  case {is_indexable(Old), is_indexable(New)} of
+    {true, true} -> perform_index_merge(Old, New);
+    _ -> Old ++ New
+  end.
+
+is_indexable(L) ->
+  lists:all(fun(I) -> is_map(I) andalso maps:is_key(<<"index">>, I) end, L).
+
+perform_index_merge(Old, New) ->
+  OldMap = to_index_map(Old),
+  NewMap = to_index_map(New),
+  Indices = lists:usort(maps:keys(OldMap) ++ maps:keys(NewMap)),
+  [merge_call(maps:get(I, OldMap, undefined), maps:get(I, NewMap, undefined)) || I <- Indices].
+
+to_index_map(L) ->
+  maps:from_list([{maps:get(<<"index">>, C, 0), C} || C <- L]).
+
+merge_call(undefined, New) -> New;
+merge_call(Old, undefined) -> Old;
+merge_call(Old, New) ->
+  Merged = maps:merge(Old, New),
+  Merged#{<<"function">> => merge_function(maps:get(<<"function">>, Old, #{}), maps:get(<<"function">>, New, #{}))}.
+
+merge_function(Old, New) ->
+  Merged = maps:merge(Old, New),
+  Merged#{<<"arguments">> => <<(maps:get(<<"arguments">>, Old, <<>>))/binary, (maps:get(<<"arguments">>, New, <<>>))/binary>>}.
+
+get_msg_content(#{<<"message">> := #{<<"content">> := C}}) -> C;
+get_msg_content(_) -> <<>>.
 
 %% =============================================================================
 %% Helpers

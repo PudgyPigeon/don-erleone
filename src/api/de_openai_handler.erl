@@ -2,70 +2,55 @@
 %% Copyright (C) 2026 Tommy (Thae Hyun) Nam <tommynam1994@gmail.com>
 
 -module(de_openai_handler).
+-behaviour(cowboy_handler).
 
--behaviour(cowboy_rest).
+-export([init/2]).
 
--export([
-  init/2,
-  allowed_methods/2,
-  content_types_accepted/2,
-  handle_post/2
-]).
-
--record(de_openai_handler_state, {}).
-
--type state() :: #de_openai_handler_state{}.
+-record(state, {}).
 
 %% =============================================================================
 %% Cowboy Callbacks
 %% =============================================================================
 
--spec init(cowboy_req:req(), state()) -> {cowboy_rest, cowboy_req:req(), state()}.
 init(Req, State) ->
-  {cowboy_rest, Req, State}.
+  handle_method(cowboy_req:method(Req), Req, State).
 
--spec allowed_methods(cowboy_req:req(), state()) -> {list(), cowboy_req:req(), state()}.
-allowed_methods(Req, State) ->
-  {[<<"POST">>], Req, State}.
-
--spec content_types_accepted(cowboy_req:req(), state()) -> {list(), cowboy_req:req(), state()}.
-content_types_accepted(Req, State) ->
-  {[{{<<"application">>, <<"json">>, []}, handle_post}], Req, State}.
+handle_method(<<"POST">>, Req, State) ->
+  decode_and_process(Req, State);
+handle_method(_, Req, State) ->
+  send_error(405, <<"Method Not Allowed">>, Req, State).
 
 %% =============================================================================
 %% Request Handling
 %% =============================================================================
 
--spec handle_post(cowboy_req:req(), state()) -> {true, cowboy_req:req(), state()} | {stop, cowboy_req:req(), state()}.
-handle_post(Req, State) ->
+decode_and_process(Req, State) ->
   {ok, Body, Req1} = cowboy_req:read_body(Req),
-  try jsx:decode(Body, [return_maps]) of
-    Params ->
-      process_request(Params, Req1, State)
-  catch
-    _:_ ->
-      send_error(400, <<"Invalid JSON">>, Req1, State)
-  end.
+  process_body(safe_decode(Body), Req1, State).
 
-process_request(Params, Req, State) ->
+process_body({ok, Params}, Req, State) ->
+  dispatch_mission(Params, Req, State);
+process_body({error, _}, Req, State) ->
+  send_error(400, <<"Invalid JSON">>, Req, State).
+
+safe_decode(Body) ->
+  try {ok, jsx:decode(Body, [return_maps])}
+  catch _:_ -> {error, bad_json} end.
+
+dispatch_mission(Params, Req, State) ->
   Prompt = extract_prompt(Params),
-  SessionId = maps:get(<<"user">>, Params, <<"default_session">>),
+  Sid = maps:get(<<"user">>, Params, <<"default_session">>),
   IsStream = maps:get(<<"stream">>, Params, false),
-
-  %% The Tag for async communication
+  
   Ref = make_ref(),
-  Self = self(),
-  From = {Self, Ref},
+  de_consigliere:handle_mission(Sid, Prompt, {self(), Ref}),
+  
+  execute_by_mode(IsStream, Req, Ref, State).
 
-  %% Orchestration: Hand off to de_consigliere
-  de_consigliere:handle_mission(SessionId, Prompt, From),
-
-  case IsStream of
-    true ->
-      execute_stream(Req, Ref, State);
-    false ->
-      execute_sync(Req, Ref, State)
-  end.
+execute_by_mode(true, Req, Ref, State) ->
+  execute_stream(Req, Ref, State);
+execute_by_mode(false, Req, Ref, State) ->
+  execute_sync(Req, Ref, State).
 
 %% =============================================================================
 %% Sync Execution
@@ -73,64 +58,63 @@ process_request(Params, Req, State) ->
 
 execute_sync(Req, Ref, State) ->
   receive
-    {Ref, {done, Answer, MissionId}} ->
-      Payload = de_openai_formatter:build_success(Answer, MissionId),
-      Req1 = cowboy_req:set_resp_body(Payload, Req),
-      {true, Req1, State};
-    {Ref, {error, Reason}} ->
-      Payload = de_openai_formatter:build_error(Reason),
-      Req1 = cowboy_req:set_resp_body(Payload, Req),
-      {true, Req1, State}
+    Msg -> handle_sync_msg(Msg, Ref, Req, State)
   after 300000 ->
-      send_error(504, <<"Gateway Timeout">>, Req, State)
+    send_error(504, <<"Gateway Timeout">>, Req, State)
   end.
+
+handle_sync_msg({Ref, {done, Answer, Mid}}, Ref, Req, State) ->
+  reply_json(200, de_openai_formatter:build_success(Answer, Mid), Req, State);
+handle_sync_msg({Ref, {error, Reason}}, Ref, Req, State) ->
+  reply_json(200, de_openai_formatter:build_error(Reason), Req, State);
+handle_sync_msg(_, _Ref, Req, State) ->
+  execute_sync(Req, _Ref, State).
 
 %% =============================================================================
 %% Stream Execution
 %% =============================================================================
 
 execute_stream(Req, Ref, State) ->
-  Req1 = cowboy_req:stream_reply(200, #{
+  Headers = #{
     <<"content-type">> => <<"text/event-stream">>,
     <<"cache-control">> => <<"no-cache">>
-  }, Req),
+  },
+  Req1 = cowboy_req:stream_reply(200, Headers, Req),
+  stream_loop(Ref, Req1, null),
+  {ok, Req1, State}.
 
-  run_stream_loop(undefined, Ref, Req1, null),
-  {stop, Req1, State}.
-
-run_stream_loop(Conn, Ref, Req, MissionId) ->
+stream_loop(Ref, Req, Mid) ->
   receive
-    Msg -> handle_stream_msg(Msg, Conn, Ref, Req, MissionId)
+    Msg -> handle_stream_event(Msg, Ref, Req, Mid)
   after 300000 ->
-    de_openai_formatter:stream_error(Req, timeout, MissionId)
+    de_openai_formatter:stream_error(Req, timeout, Mid)
   end.
 
-handle_stream_msg({Ref, {chunk, Content, Mid}}, Conn, Ref, Req, _Mid) ->
-  de_openai_formatter:stream_chunk(Req, Content, Mid),
-  run_stream_loop(Conn, Ref, Req, Mid);
-handle_stream_msg({Ref, {done, Content, Mid}}, _Conn, Ref, Req, _Mid) ->
-  de_openai_formatter:stream_chunk(Req, Content, Mid),
-  de_openai_formatter:stream_done(Req, Mid);
-handle_stream_msg({Ref, {error, Reason}}, _Conn, Ref, Req, MissionId) ->
-  de_openai_formatter:stream_error(Req, Reason, MissionId);
-handle_stream_msg({'DOWN', _, process, Conn, Reason}, Conn, _Ref, Req, MissionId) ->
-  logger:error(#{event => process_died, pid => Conn, reason => Reason}),
-  de_openai_formatter:stream_error(Req, process_died, MissionId);
-handle_stream_msg(Unexpected, Conn, Ref, Req, MissionId) ->
-  logger:warning(#{event => unexpected_msg, msg => Unexpected}),
-  run_stream_loop(Conn, Ref, Req, MissionId).
+handle_stream_event({Ref, {chunk, Content, NewMid}}, Ref, Req, _Mid) ->
+  de_openai_formatter:stream_chunk(Req, Content, NewMid),
+  stream_loop(Ref, Req, NewMid);
+handle_stream_event({Ref, {done, Content, NewMid}}, Ref, Req, _Mid) ->
+  de_openai_formatter:stream_chunk(Req, Content, NewMid),
+  de_openai_formatter:stream_done(Req, NewMid);
+handle_stream_event({Ref, {error, Reason}}, Ref, Req, Mid) ->
+  de_openai_formatter:stream_error(Req, Reason, Mid);
+handle_stream_event({'DOWN', _, process, _, Reason}, _Ref, Req, Mid) ->
+  de_openai_formatter:stream_error(Req, {process_died, Reason}, Mid);
+handle_stream_event(_Unexpected, Ref, Req, Mid) ->
+  stream_loop(Ref, Req, Mid).
 
 %% =============================================================================
 %% Helpers
 %% =============================================================================
 
 extract_prompt(#{<<"messages">> := Msgs}) ->
-  LastMsg = lists:last(Msgs),
-  maps:get(<<"content balance">>, LastMsg, maps:get(<<"content">>, LastMsg, <<>>));
+  maps:get(<<"content">>, lists:last(Msgs), <<>>);
 extract_prompt(_) ->
   <<>>.
 
-send_error(Code, Msg, Req, State) ->
-  Payload = de_openai_formatter:build_error(Msg),
+reply_json(Code, Payload, Req, State) ->
   Req1 = cowboy_req:reply(Code, #{<<"content-type">> => <<"application/json">>}, Payload, Req),
-  {stop, Req1, State}.
+  {ok, Req1, State}.
+
+send_error(Code, Msg, Req, State) ->
+  reply_json(Code, de_openai_formatter:build_error(Msg), Req, State).

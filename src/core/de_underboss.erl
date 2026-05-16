@@ -103,10 +103,7 @@ handle_error(MissionSpec, Class, Reason, Stack) ->
   notify_caller(MissionSpec, Reason).
 
 -spec notify_caller(map(), term()) -> ok.
-notify_caller(#{cowboy_from := {Pid, Tag}}, Reason) ->
-  case is_process_alive(Pid) of
-    true -> Pid ! {Tag, {error, {execution_failed, Reason}}}, ok;
-    false -> ok
-  end;
+notify_caller(#{cowboy_from := From, session_id := Sid}, Reason) ->
+  de_consigliere:handle_system_error(Sid, Reason, From);
 notify_caller(_, _) ->
   ok.

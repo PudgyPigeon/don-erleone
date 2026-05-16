@@ -59,7 +59,10 @@ handle_call({consult, Sid, Prompt, From}, _From, State) ->
 execute_consultation(Sid, Prompt, From, State) ->
   Config = State#de_consigliere_worker_state.config,
   Context = de_store:get_latest_context(Sid),
-  handle_ollama_result(call_ollama(Prompt, Context, Config), Sid, Prompt, Context, From, State).
+  logger:debug(#{event => calling_ollama, session_id => Sid}),
+  Result = call_ollama(Prompt, Context, Config),
+  logger:debug(#{event => ollama_returned, session_id => Sid, result => Result}),
+  handle_ollama_result(Result, Sid, Prompt, Context, From, State).
 
 handle_ollama_result({ok, Data}, Sid, Prompt, Context, From, State) ->
   Raw = extract_raw(Data),
@@ -78,15 +81,28 @@ handle_worker_fault(Error, Stack, Sid, From, State) ->
 %% Decision Flow
 %% =============================================================================
 
-process_decision(Sid, Prompt, Raw, PrevCtx, From, State) ->
-  Decision = de_mission_brain:analyze_llm_response(Raw, PrevCtx),
-  NewCtx = de_mission_brain:build_new_context(Prompt, Raw, PrevCtx),
-  handle_decision(Decision, Sid, Prompt, NewCtx, From, State).
+process_decision(Sid, Prompt, Raw, Context, From, State) ->
+  try
+    Decision = de_mission_brain:analyze_llm_response(Raw, Context),
+    NewCtx = de_mission_brain:build_new_context(Prompt, Raw, Context),
+    handle_decision(Decision, Sid, Prompt, NewCtx, From, State)
+  catch
+    Class:Reason:Stack ->
+      logger:error(#{
+        event => decision_processing_failed,
+        session_id => Sid,
+        class => Class,
+        reason => Reason,
+        stack => Stack
+      }),
+      handle_worker_fault(Reason, Stack, Sid, From, State)
+  end.
 
 handle_decision({delegate, Intent, Args, Msg}, Sid, Prompt, NewCtx, From, State) ->
   logger:info(#{event => decision_delegate, session_id => Sid, intent => Intent}),
-  Data = {chunk, [<<"\n">>, Msg, <<"\n">>]},
-  finalize_decision(Sid, Intent, Prompt, NewCtx, From, State, Data, Args);
+  %% Ensure binary for JSON safety
+  BinMsg = iolist_to_binary([<<"\n">>, Msg, <<"\n">>]),
+  finalize_decision(Sid, Intent, Prompt, NewCtx, From, State, {chunk, BinMsg}, Args);
 handle_decision({direct, Msg}, Sid, Prompt, NewCtx, From, State) ->
   logger:info(#{event => decision_direct, session_id => Sid}),
   finalize_decision(Sid, <<"direct">>, Prompt, NewCtx, From, State, {done, Msg}, undefined).
@@ -96,23 +112,24 @@ finalize_decision(Sid, Intent, Prompt, NewCtx, From, State, MsgData, Args) ->
   handle_storage_result(Result, Sid, Intent, Prompt, From, State, MsgData, Args).
 
 handle_storage_result({ok, Mid}, Sid, Intent, Prompt, From, State, MsgData, Args) ->
-  dispatch_result(From, MsgData, Mid, Intent, Args, Prompt, State);
+  dispatch_result(Sid, From, MsgData, Mid, Intent, Args, Prompt, State);
 handle_storage_result({error, Reason}, Sid, _Intent, _Prompt, From, State, _MsgData, _Args) ->
   logger:error(#{event => de_store_failed, session_id => Sid, error => Reason}),
   notify_error(From, Reason),
   {reply, {error, Reason}, State}.
 
-dispatch_result(From, {Tag, Content}, Mid, <<"direct">>, _Args, _Prompt, State) ->
+dispatch_result(_Sid, From, {Tag, Content}, Mid, <<"direct">>, _Args, _Prompt, State) ->
   safe_send(From, {Tag, Content, Mid}),
   {reply, ok, State};
-dispatch_result(From, {Tag, Content}, Mid, Intent, Args, Prompt, State) ->
+dispatch_result(Sid, From, {Tag, Content}, Mid, Intent, Args, Prompt, State) ->
   safe_send(From, {Tag, Content, Mid}),
   de_underboss:dispatch_mission(#{
     id => Mid,
     intent => Intent,
     args => Args,
     prompt => Prompt,
-    cowboy_from => From
+    cowboy_from => From,
+    session_id => Sid
   }),
   {reply, ok, State}.
 

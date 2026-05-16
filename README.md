@@ -1,36 +1,15 @@
 # Next steps:
 - "The Wire"
 - Phoenix dashboard
-- Telemetry
+- Telemetry (Core Integrated)
 - BEAM VM cluster 
 - Swarm Timeline - Coordination
 - Document processing
 - Decoupled context
 
-```
-don_erleone (Top-Level Supervisor | Strategy: one_for_one)
- │
- ├── the_front (Cowboy HTTP/SSE Ingress Worker)
- │    └── Purpose: Handles incoming API requests and holds streaming connections.
- │
- └── the_commission (Core Sub-Supervisor | Strategy: rest_for_one)
-      │    └── Purpose: Enforces shared fate between reasoning and execution.
-      │
-      ├── underboss (Execution Supervisor | Starts First)
-      │    │
-      │    └── caporegime_pool (Poolboy Manager)
-      │         └── Purpose: Workers that execute Nix/K8s tool calls via the small LLM.
-      │
-      └── consigliere_pool (Reasoning Poolboy Manager | Starts Second)
-           │
-           └── Purpose: Workers that hold the system prompt and route intents via the large LLM.
-```
-
---------------
-
 # Don Erleone — Architecture
 
-> An Erlang/OTP agentic AI orchestrator with a Mafia-themed supervision hierarchy.
+> **An Erlang/OTP agentic AI orchestrator with a Mafia-themed supervision hierarchy.**
 > Exposes an OpenAI-compatible HTTP API, routes user prompts through a "reasoning" LLM,
 > and delegates infrastructure tasks to "execution" workers powered by a smaller LLM.
 
@@ -38,21 +17,23 @@ don_erleone (Top-Level Supervisor | Strategy: one_for_one)
 
 ## 1. Supervision Tree
 
+The system is built on a robust OTP hierarchy designed for fault tolerance and clear separation of concerns.
+
 ```mermaid
 graph TD
-    E["entrypoint (application)"] --> D
+    E["de_app (application)"] --> D
 
-    D["don_erleone (supervisor)<br/>strategy: one_for_one"]
-    D --> TF["the_front (gen_server)<br/>Cowboy HTTP on :8080"]
-    D --> G["the_commission (supervisor)<br/>strategy: rest_for_one"]
+    D["de_sup (supervisor)<br/>strategy: one_for_one"]
+    D --> TF["de_front (gen_server)<br/>Cowboy HTTP on :8080"]
+    D --> G["de_commission (supervisor)<br/>strategy: rest_for_one"]
 
-    G --> U["underboss (supervisor)<br/>strategy: one_for_one"]
-    G --> CP["consigliere_pool (poolboy)<br/>5 workers, max overflow 10"]
+    G --> U["de_underboss (supervisor)<br/>strategy: one_for_one"]
+    G --> CP["consigliere_pool (poolboy)<br/>Dispatcher for reasoning"]
 
-    U --> KP["caporegime_pool (poolboy)<br/>3 workers, max overflow 5"]
+    U --> KP["caporegime_pool (poolboy)<br/>Dispatcher for execution"]
 
-    CP -.->|workers| CW["consigliere_worker (gen_server)<br/>Large model: qwen2.5:7b"]
-    KP -.->|workers| CR["caporegime (gen_server)<br/>Small model: qwen2.5:1.5b"]
+    CP -.->|workers| CW["de_consigliere_worker (gen_server)<br/>Large model: qwen2.5:7b"]
+    KP -.->|workers| CR["de_caporegime (gen_server)<br/>Small model: qwen2.5:1.5b"]
 
     style D fill:#8B0000,color:#fff
     style G fill:#555,color:#fff
@@ -64,287 +45,108 @@ graph TD
     style CR fill:#B7950B,color:#fff
 ```
 
-**Key design choice:** `the_commission` uses `rest_for_one`. The underboss starts *first*. If it crashes, the consigliere pool is also restarted — preventing workers from holding stale references to a dead caporegime pool.
+**Key design choice:** `de_commission` uses `rest_for_one`. The `de_underboss` (execution layer) starts *first*. If it crashes, the reasoning pool is also restarted — preventing workers from holding stale references to dead execution workers.
 
 ---
 
-## 2. Request Flow
+## 2. Request Flow (Pipelined Execution)
+
+The system uses an asynchronous reply pattern to decouple HTTP request lifecycles from worker pools.
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant TF as the_front / openai_handler
-    participant C as consigliere (dispatcher)
-    participant CW as consigliere_worker
-    participant OL as ollama_client (7b)
-    participant MS as mission_store (Mnesia)
-    participant UB as underboss
-    participant CR as caporegime
-    participant OLS as ollama_client (1.5b)
+    participant TF as de_front / de_openai_handler
+    participant C as de_consigliere (dispatcher)
+    participant CW as de_consigliere_worker
+    participant OC as de_ollama_client (7b)
+    participant DS as de_store (Mnesia)
+    participant UB as de_underboss
+    participant CR as de_caporegime
+    participant OCS as de_ollama_client (1.5b)
 
-    Client->>TF: POST /v1/chat/completions (stream: true)
-    TF->>TF: Parse body, extract prompt + session ID + stream flag
-    TF->>TF: Start SSE stream (200, text/event-stream)
+    Client->>TF: POST /v1/chat/completions
     TF->>C: handle_mission(SessionId, Prompt, {self(),Tag})
-    C->>CW: poolboy:transaction -> gen_server:call
+    C->>CW: poolboy:transaction
+    CW->>DS: get_latest_context(SessionId)
+    CW->>OC: generate(Prompt)
+    OC-->>CW: Normalized Message Map
 
-    CW->>MS: get_latest_context(SessionId)
-    CW->>OL: generate(Prompt, SystemPrompt, Context)
-    OL-->>CW: JSON with delegate_required, tool_intent, response
-
-    alt delegate_required = false
-        CW->>MS: post_mission(direct_answer)
-        CW-->>TF: {Tag, {done, Response, MissionId}}
-        TF-->>Client: SSE chunk (content) + [DONE]
-    else delegate_required = true
-        CW->>MS: post_mission(intent)
-        CW-->>TF: {Tag, {chunk, Response, MissionId}}
-        TF-->>Client: SSE chunk 1 (consigliere response)
-        CW->>UB: dispatch_mission(MissionSpec incl. cowboy_from)
-        UB->>CR: poolboy:transaction -> execute_mission
-        CR->>MS: update_status(in_progress)
-        CR->>OLS: generate(SubPrompt)
-        OLS-->>CR: result
-        CR->>MS: complete_mission / fail_mission
-        CR-->>TF: {Tag, {done, Result, MissionId}}
-        TF-->>Client: SSE chunk 2 (execution result) + [DONE]
+    alt Reasoning complete
+        CW->>DS: post_mission(direct)
+        CW-->>TF: {Tag, {done, Result}}
+        TF-->>Client: JSON / SSE Response
+    else Delegation required (MCP/Autonomous)
+        CW->>UB: execute_mission(MissionSpec)
+        UB->>CR: poolboy:transaction
+        CR->>OCS: recursive_reasoning_loop(Tools)
+        OCS-->>CR: Tool Results
+        CR->>DS: complete_mission
+        CR-->>TF: {Tag, {done, FinalResult}}
+        TF-->>Client: JSON / SSE Response
     end
 ```
 
 ---
 
-## 3. Module Map
+## 3. Module Details (The DE Standard)
 
-```mermaid
-graph LR
-    subgraph "HTTP Layer"
-        TF[the_front]
-        OH[openai_handler]
-        HH[health_handler]
-    end
-
-    subgraph "Reasoning Layer"
-        CON[consigliere]
-        CW[consigliere_worker]
-    end
-
-    subgraph "Execution Layer"
-        UB[underboss]
-        CR[caporegime]
-    end
-
-    subgraph "Infrastructure"
-        OC[ollama_client]
-        MS[mission_store]
-    end
-
-    TF -->|routes| OH
-    TF -->|routes| HH
-    OH -->|dispatches| CON
-    CON -->|pool checkout| CW
-    CW -->|calls| OC
-    CW -->|reads/writes| MS
-    CW -->|delegates| UB
-    UB -->|pool checkout| CR
-    CR -->|calls| OC
-    CR -->|reads/writes| MS
-```
-
----
-
-## 4. Module Details
+All modules follow a strict functional decomposition pattern, separating mailbox management (GenServers) from pure logic (Stateless modules).
 
 | Module | OTP Behaviour | Role |
 |---|---|---|
-| `entrypoint` | `application` | Boots the app, calls `don_erleone:start_link()` |
-| `don_erleone` | `supervisor` | Top-level sup. Inits Mnesia, loads configs, starts children |
-| `the_front` | `gen_server` | Starts Cowboy HTTP listener on port 8080 |
-| `openai_handler` | cowboy handler | Parses OpenAI-format requests, blocks on async reply from consigliere |
-| `health_handler` | cowboy handler | Returns `{"status":"ok"}` on `/health` |
-| `consigliere` | stateless module | Dispatches to `consigliere_pool` via `proc_lib:spawn` |
-| `consigliere_worker` | `gen_server` + `poolboy_worker` | Calls the large LLM, parses JSON response, routes to direct answer or delegation |
-| `the_commission` | `supervisor` | `rest_for_one` sub-supervisor owning underboss + consigliere pool |
-| `underboss` | `supervisor` | Owns the caporegime pool. Exposes `dispatch_mission/1` |
-| `caporegime` | `gen_server` + `poolboy_worker` | Executes delegated missions via the small LLM or MCP HTTP calls |
-| `ollama_client` | stateless module | Shared HTTP client for Ollama `/api/generate` |
-| `mission_store` | stateless module | Mnesia CRUD for mission records (ram_copies) |
+| `de_app` | `application` | Boots the OTP application. |
+| `de_sup` | `supervisor` | Top-level supervisor; manages Ingress and Core. |
+| `de_front` | `gen_server` | Owns the Cowboy HTTP listener. |
+| `de_openai_handler` | cowboy handler | Normalizes requests to OpenAI format. |
+| `de_consigliere` | stateless | Dispatcher for reasoning tasks. |
+| `de_consigliere_worker`| `gen_server` | Reasoning worker; orchestrates LLM calls. |
+| `de_commission` | `supervisor` | Manages shared fate between reasoning and execution. |
+| `de_underboss` | `supervisor` | Owns and supervises the execution pool. |
+| `de_caporegime` | `gen_server` | Execution worker; handles MCP tool discovery and loops. |
+| `de_ollama_client` | stateless | Pipelined HTTP client for Ollama. |
+| `de_agent_brain` | stateless | Pure logic for interpreting LLM outputs and tools. |
+| `de_store` | stateless | Mnesia abstraction layer with transaction safety. |
+| `de_telemetry` | stateless | Centralized telemetry and metrics setup. |
 
 ---
 
-## 5. Two-Model LLM Strategy
+## 4. Data Standards & Persistence
 
-| | Consigliere (Reasoning) | Caporegime (Execution) |
-|---|---|---|
-| **Default model** | `qwen2.5:7b` | `qwen2.5:1.5b` |
-| **Purpose** | Interpret user intent, decide routing | Execute specific tasks (k8s YAML, status checks) |
-| **System prompt** | Yes — structured JSON output with `delegate_required` flag | Per-task prompts built by `build_sub_prompt/3` |
-| **Timeout** | 3,600s (1 hour) | 120s |
-| **Config record** | `#config{}` | `#sub_config{}` |
-
----
-
-## 6. Data Records
-
-Source: [records.hrl](file:///home/nixos/Documents/agent_project/localhost_agent/apps/don-erleone/include/records.hrl)
+Mnesia is used for session and mission persistence. The primary record is defined in `de_store.erl`.
 
 ```erlang
-%% Consigliere config
--record(config, {ollama_url, model, timeout, stream, system_prompt}).
-
-%% Caporegime config
--record(sub_config, {ollama_url, model, timeout}).
-
-%% Mission ledger (Mnesia table, ram_copies)
 -record(mission, {
-    id,              %% unique monotonic integer
-    session_id,      %% peer IP string
-    intent,          %% <<"k8s_deploy">>, <<"check_mcp">>, <<"direct_answer">>
-    raw_prompt,      %% original user input
-    status,          %% pending -> in_progress -> completed | failed
-    result,          %% final result map from caporegime
-    error,           %% error reason if failed
-    context_tokens,  %% Ollama context array for conversational memory
-    timestamp        %% erlang:system_time(second)
+  id,              %% unique monotonic integer
+  session_id,      %% binary session identifier
+  intent,          %% current mission goal
+  raw_prompt,      %% original user input
+  status,          %% pending | in_progress | completed | failed
+  result,          %% final execution payload
+  error,           %% failure reason
+  context_tokens,  %% conversational memory
+  timestamp        %% system time
 }).
 ```
 
-**Mission lifecycle:** `pending` → `in_progress` → `completed` | `failed`
-
 ---
 
-## 7. Async Reply Pattern (with SSE Streaming)
+## 5. Testing & Observability
 
-The `openai_handler` cannot wait on a normal `gen_server:call` through poolboy (that would hold the pool worker hostage for the entire HTTP request). Instead:
+### Test Suite
+The system includes a granular unit test suite (85+ tests) following the **Macro-List Style**. Tests are designed to be quiet and isolated using `logger` configuration management.
 
-1. Handler creates `Tag = make_ref()` and passes `{self(), Tag}` as `CowboyFrom`
-2. Handler starts an SSE stream with `cowboy_req:stream_reply(200, SSE headers, Req)` (when `stream: true`)
-3. `consigliere:handle_mission/3` spawns a process that checks out a pool worker
-4. The worker does its work, then sends `CowboyPid ! {CowboyTag, Result}` directly
-   - Direct answers: `{Tag, {direct, Response, Meta}}`
-   - Delegated missions: `{Tag, {delegated, Response, Meta}}`
-5. The pool worker returns `{reply, ok, State}` to release itself back to poolboy
-6. For delegated missions, the `CowboyFrom` is included in the `MissionSpec` and threaded through to the caporegime
-7. After execution, the caporegime sends `{Tag, {execution_complete, Result}}` to the handler
-8. The handler streams each message as an SSE chunk in OpenAI `chat.completion.chunk` format
-
-**Streaming mode** (`stream: true`): The consigliere's response arrives as SSE chunk 1, then the caporegime's execution result as chunk 2, followed by `[DONE]`. This gives Open WebUI users real-time feedback.
-
-**Non-streaming mode** (`stream: false`): The handler waits for both messages and returns a single combined JSON response. Falls back to the consigliere response only if the caporegime times out.
-
-This decouples the HTTP request lifecycle from the pool worker lifecycle while ensuring execution results reach the client.
-
----
-
-## 8. Supported Intents
-
-The caporegime dispatches on the `tool_intent` string from the consigliere's LLM output:
-
-| Intent | Behaviour |
-|---|---|
-| `k8s_deploy` | Builds a k8s-specific sub-prompt, calls small LLM for YAML manifest generation |
-| `check_mcp` | If `mcp_args` contains an `endpoint` URL, makes a direct HTTP POST to that MCP endpoint. Otherwise falls back to sub-model reasoning |
-| *(any other)* | Generic sub-agent prompt with intent + args, calls small LLM |
-
----
-
-## 9. External Dependencies
-
-| Dependency | Purpose |
-|---|---|
-| **Cowboy** | HTTP server |
-| **Poolboy** | Worker pool management |
-| **JSX** | JSON encode/decode |
-| **Mnesia** | In-memory mission store |
-| **Ollama** | Local LLM inference (external service) |
-
-
-----
-
-Alternate look at design:
-
-```mermaid
-graph TD
-    subgraph External
-        USER["curl / Frontend / OpenWebUI"]
-        MCP_EXT["External MCP Servers"]
-        WEBHOOKS["Webhooks / Events"]
-    end
-
-    subgraph "don_erleone (top supervisor)"
-        subgraph "The Front"
-            COWBOY["the_front (gen_server)"]
-            HANDLER["openai_handler"]
-            SSE["SSE streaming handler"]
-            HEALTH["health + metrics handler"]
-            WS["WebSocket handler"]
-        end
-
-        subgraph "Consigliere Pool (poolboy)"
-            CW["consigliere_workers"]
-        end
-
-        subgraph "Underboss (supervisor)"
-            DISPATCH["dispatch + routing logic"]
-            subgraph "Caporegime Pool (poolboy)"
-                CAP["caporegime_workers"]
-            end
-            subgraph "Fan-out Supervisor (simple_one_for_one)"
-                LT1["mission_crew (supervisor)"]
-                LT2["mission_crew (supervisor)"]
-            end
-        end
-
-        subgraph "MCP Client Registry"
-            MCP_REG["mcp_registry (gen_server)"]
-            MCP_K8S["k8s_mcp_client"]
-            MCP_NIX["nix_mcp_client"]
-            MCP_GIT["git_mcp_client"]
-        end
-
-        subgraph "Persistence"
-            MNESIA["mission_store (mnesia disc_copies)"]
-            CONTEXT["context_store (conversation history)"]
-        end
-
-        subgraph "Observability"
-            METRICS["prometheus_metrics"]
-            TRACES["opentelemetry spans"]
-        end
-    end
-
-    subgraph "Ollama Backend"
-        BIG["Large Model (reasoning)"]
-        MED["Medium Model (tasks)"]
-        SMALL["Small Model (extraction)"]
-    end
-
-    USER -->|"POST + SSE"| COWBOY
-    WEBHOOKS -->|"async events"| WS
-    COWBOY --> HANDLER
-    COWBOY --> SSE
-    HANDLER --> CW
-    CW --> BIG
-    CW -->|"simple task"| CAP
-    CW -->|"complex multi-step"| LT1
-    CAP --> MED
-    LT1 -->|"step 1: generate"| MED
-    LT1 -->|"step 2: validate"| MCP_K8S
-    LT1 -->|"step 3: apply"| MCP_K8S
-    MCP_REG --> MCP_K8S
-    MCP_REG --> MCP_NIX
-    MCP_REG --> MCP_GIT
-    MCP_K8S --> MCP_EXT
-    CAP --> MNESIA
-    LT1 --> MNESIA
-    CW --> CONTEXT
-
-    style BIG fill:#e74c3c,color:#fff
-    style MED fill:#e67e22,color:#fff
-    style SMALL fill:#3498db,color:#fff
-    style MNESIA fill:#2ecc71,color:#fff
-    style CONTEXT fill:#2ecc71,color:#fff
-    style MCP_REG fill:#f39c12,color:#fff
+```bash
+# Run the full suite
+rebar3 eunit
 ```
+
+### Telemetry
+All core operations emit `telemetry` events for monitoring performance and failure rates:
+- `[don_erleone, worker, execute, start/stop/exception]`
+- `[don_erleone, ollama, request, start/stop/error]`
+
+---
 
 # License
 

@@ -3,7 +3,10 @@
 
 -module(de_consigliere).
 
--export([handle_mission/3]).
+-export([
+  handle_mission/3,
+  handle_system_error/3
+]).
 
 %% =============================================================================
 %% API: The Dispatcher (Imperative Shell)
@@ -14,6 +17,12 @@ handle_mission(SessionId, Prompt, CowboyFrom) ->
   %% We use proc_lib:spawn to ensure the process is integrated into OTP error logging
   proc_lib:spawn(fun() -> async_pool_consult(SessionId, Prompt, CowboyFrom) end),
   ok.
+
+-spec handle_system_error(binary(), term(), {pid(), reference()}) -> ok.
+handle_system_error(SessionId, Reason, CowboyFrom) ->
+  FormattedReason = iolist_to_binary(io_lib:format("~p", [Reason])),
+  SystemPrompt = <<"[SYSTEM] The Caporegime failed to execute the delegated mission due to an error: ", FormattedReason/binary, ". Please apologize to the user and explain that the infrastructure tool is currently unavailable.">>,
+  handle_mission(SessionId, SystemPrompt, CowboyFrom).
 
 %% =============================================================================
 %% Internal Helpers: Orchestration & Error Handling

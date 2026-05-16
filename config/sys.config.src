@@ -2,7 +2,7 @@
    {don_erleone, 
     [
       {ollama_model, "${OLLAMA_MODEL:-qwen3.5:9b}"},
-      {ollama_url, "${OLLAMA_URL:-http://localhost:11434/api/generate}"},
+      {ollama_url, "${OLLAMA_URL:-http://localhost:11434/api/chat}"},
       {mcp_url, "${MCP_URL:-http://localhost:30090/mcp}"},
       {timeout, ${TIMEOUT:-3600000}},
       {sub_model, "${SUB_MODEL:-qwen3.5:9b}"},
