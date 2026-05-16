@@ -20,6 +20,14 @@
   mission_error/1
 ]).
 
+-ifdef(TEST).
+-export([
+  handle_transaction/2,
+  handle_read_result/1,
+  handle_write_result/2
+]).
+-endif.
+
 -export_type([mission/0]).
 
 -record(mission, {
@@ -53,16 +61,16 @@ init_db() ->
 
 -spec ensure_table(atom(), list()) -> ok | {error, term()}.
 ensure_table(Name, Def) ->
-  case mnesia:create_table(Name, Def) of
-    {atomic, ok} ->
-      logger:info(#{event => table_created, table => Name}),
-      mnesia:wait_for_tables([Name], 5000);
-    {aborted, {already_exists, Name}} ->
-      mnesia:wait_for_tables([Name], 5000);
-    {aborted, Reason} ->
-      logger:error(#{event => table_creation_failed, table => Name, error => Reason}),
-      {error, Reason}
-  end.
+  handle_create_result(mnesia:create_table(Name, Def), Name).
+
+handle_create_result({atomic, ok}, Name) ->
+  logger:info(#{event => table_created, table => Name}),
+  mnesia:wait_for_tables([Name], 5000);
+handle_create_result({aborted, {already_exists, Name}}, Name) ->
+  mnesia:wait_for_tables([Name], 5000);
+handle_create_result({aborted, Reason}, Name) ->
+  logger:error(#{event => table_creation_failed, table => Name, error => Reason}),
+  {error, Reason}.
 
 %% =============================================================================
 %% Public API (Orchestration)
@@ -88,12 +96,12 @@ get_mission(Id) ->
 
 -spec get_latest_context(binary()) -> list().
 get_latest_context(SessionId) ->
-  case mnesia:dirty_index_read(mission, SessionId, #mission.session_id) of
-    [] -> [];
-    List ->
-      Sorted = sort_by_timestamp(List),
-      extract_context(hd(Sorted))
-  end.
+  process_context_read(mnesia:dirty_index_read(mission, SessionId, #mission.session_id)).
+
+process_context_read([]) -> [];
+process_context_read(List) ->
+  Sorted = sort_by_timestamp(List),
+  extract_context(hd(Sorted)).
 
 -spec update_status(integer(), atom()) -> ok | {error, term()}.
 update_status(MissionId, NewStatus) ->
@@ -103,17 +111,17 @@ update_status(MissionId, NewStatus) ->
 complete_mission(MissionId, Result) ->
   modify_mission(MissionId, fun(R) -> R#mission{status = completed, result = Result} end).
 
--spec fail_mission(integer(), term()) -> ok | {error, term()}.
-fail_mission(MissionId, Error) ->
-  modify_mission(MissionId, fun(R) -> R#mission{status = failed, error = Error} end).
-
 -spec get_pending_missions() -> {ok, [mission()]} | {error, term()}.
 get_pending_missions() ->
   Trans = fun() -> mnesia:index_read(mission, pending, #mission.status) end,
-  case mnesia:transaction(Trans) of
-    {atomic, Results} -> {ok, Results};
-    {aborted, Reason} -> {error, Reason}
+  case handle_transaction(mnesia:transaction(Trans), undefined) of
+    {error, _} = Err -> Err;
+    Results -> {ok, Results}
   end.
+
+-spec fail_mission(integer(), term()) -> ok | {error, term()}.
+fail_mission(MissionId, Error) ->
+  modify_mission(MissionId, fun(R) -> R#mission{status = failed, error = Error} end).
 
 %% =============================================================================
 %% Internal Transaction Logic
@@ -127,30 +135,31 @@ modify_mission(Id, UpdateFun) ->
       [] -> {error, not_found}
     end
   end,
-  case mnesia:transaction(Trans) of
-    {atomic, ok} -> ok;
-    {atomic, {error, _} = Err} -> Err;
-    {aborted, Reason} -> {error, Reason}
-  end.
+  handle_transaction(mnesia:transaction(Trans), Id).
 
 -spec execute_write(mission(), integer()) -> {ok, integer()} | {error, term()}.
 execute_write(Record, Id) ->
-  case mnesia:transaction(fun() -> mnesia:write(Record) end) of
-    {atomic, ok} -> {ok, Id};
-    {aborted, Reason} ->
-      logger:error(#{event => db_write_failed, mission_id => Id, error => Reason}),
-      {error, Reason}
-  end.
+  Result = mnesia:transaction(fun() -> mnesia:write(Record) end),
+  handle_write_result(handle_transaction(Result, Id), Id).
+
+handle_write_result(ok, Id) -> {ok, Id};
+handle_write_result(Error, _Id) -> Error.
 
 -spec execute_read(integer()) -> {ok, mission()} | {error, term()}.
 execute_read(Id) ->
-  case mnesia:transaction(fun() -> mnesia:read(mission, Id) end) of
-    {atomic, [Result]} -> {ok, Result};
-    {atomic, []} -> {error, not_found};
-    {aborted, Reason} ->
-      logger:error(#{event => db_read_failed, mission_id => Id, error => Reason}),
-      {error, Reason}
-  end.
+  Result = mnesia:transaction(fun() -> mnesia:read(mission, Id) end),
+  handle_read_result(handle_transaction(Result, Id)).
+
+handle_read_result([Result]) -> {ok, Result};
+handle_read_result([]) -> {error, not_found};
+handle_read_result(Error) -> Error.
+
+-spec handle_transaction({atomic, term()} | {aborted, term()}, integer() | undefined) ->
+  term() | {error, term()}.
+handle_transaction({atomic, Result}, _Id) -> Result;
+handle_transaction({aborted, Reason}, Id) ->
+  logger:error(#{event => db_transaction_failed, mission_id => Id, error => Reason}),
+  {error, Reason}.
 
 %% =============================================================================
 %% Pure Helpers

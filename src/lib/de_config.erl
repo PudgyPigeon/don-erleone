@@ -58,7 +58,7 @@
 load_main_config() ->
   #config{
     ollama_url = get_env_string(ollama_url,
-      "http://ollama-internal.ollama.svc.cluster.local:11434/api/generate"),
+      "http://localhost:11434/api/generate"),
     model = get_env_string(ollama_model, "qwen3.5:9b"),
     timeout = get_env_integer(timeout, 3600000),
     stream = false,
@@ -69,12 +69,12 @@ load_main_config() ->
 load_sub_agent_config() ->
   #sub_config{
     ollama_url = get_env_string(ollama_url,
-      "http://ollama-internal.ollama.svc.cluster.local:11434/api/generate"),
+      "http://localhost:11434/api/generate"),
     model = get_env_string(sub_model, "qwen3.5:9b"),
     timeout = get_env_integer(sub_timeout, 120000),
     max_steps = get_env_integer(sub_max_steps, 10),
     mcp_url = get_env_string(mcp_url,
-      "http://kubernetes-mcp.kubernetes-mcp.svc.cluster.local:30090/mcp")
+      "http://localhost:30090/mcp")
   }.
 
 -spec get_system_prompt() -> binary().

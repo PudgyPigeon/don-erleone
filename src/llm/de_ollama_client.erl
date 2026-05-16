@@ -11,6 +11,13 @@
   generate_with_tools/5
 ]).
 
+-ifdef(TEST).
+-export([
+  handle_stream_event/4,
+  parse_endpoint/1
+]).
+-endif.
+
 %% =============================================================================
 %% API
 %% =============================================================================
@@ -53,30 +60,49 @@ execute_request(Prompt, System, Context, Tools, Opts, Callback) ->
 %% =============================================================================
 
 do_http_call(Endpoint, Payload, Timeout, IsStream, Callback) ->
+  {Host, Port, Path} = parse_endpoint(Endpoint),
+  StartTime = erlang:system_time(microsecond),
+  
+  telemetry:execute([don_erleone, ollama, request, start], #{time => StartTime},
+    #{host => Host, path => Path}),
+
+  Result = case establish_conn(Host, Port) of
+    {ok, ConnPid} ->
+      execute_with_conn(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host);
+    {error, {Type, Reason}} ->
+      handle_connection_error(Host, Port, Type, Reason)
+  end,
+
+  telemetry:execute([don_erleone, ollama, request, stop],
+    #{duration => erlang:system_time(microsecond) - StartTime},
+    #{host => Host, success => (case Result of {ok, _} -> true; _ -> false end)}),
+  Result.
+
+parse_endpoint(Endpoint) ->
   URI = uri_string:parse(Endpoint),
   Host = maps:get(host, URI),
   Port = maps:get(port, URI, 80),
   Path = maps:get(path, URI),
+  {Host, Port, Path}.
 
-  StartTime = erlang:system_time(microsecond),
-  telemetry:execute([don_erleone, ollama, request, start], #{time => StartTime},
-    #{host => Host, path => Path}),
-
-  case establish_conn(Host, Port) of
-    {ok, ConnPid} ->
-      Result = perform_request(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host),
-
-      telemetry:execute([don_erleone, ollama, request, stop],
-        #{duration => erlang:system_time(microsecond) - StartTime},
-        #{host => Host, success => (case Result of {ok, _} -> true; _ -> false end)}),
-
-      gun:close(ConnPid),
-      Result;
-    {error, {Type, Reason}} ->
-      telemetry:execute([don_erleone, ollama, request, error], #{},
-        #{host => Host, reason => Type, error => Reason}),
-      {error, {Type, Reason}}
+execute_with_conn(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host) ->
+  try
+    perform_request(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host)
+  after
+    gun:close(ConnPid)
   end.
+
+handle_connection_error(Host, Port, Type, Reason) ->
+  logger:error(#{
+    event => ollama_connection_failed,
+    host => Host,
+    port => Port,
+    type => Type,
+    error => Reason
+  }),
+  telemetry:execute([don_erleone, ollama, request, error], #{},
+    #{host => Host, reason => Type, error => Reason}),
+  {error, {Type, Reason}}.
 
 establish_conn(Host, Port) ->
   case gun:open(to_list(Host), Port, #{connect_timeout => 10000, protocols => [http]}) of
@@ -102,20 +128,52 @@ perform_request(ConnPid, Path, Payload, Timeout, IsStream, Callback, Host) ->
 %% =============================================================================
 
 stream_loop(Conn, Ref, Tmo, IsStream, Buffer, Acc, CB, Host) ->
+  Ctx = #{
+    conn => Conn,
+    ref => Ref,
+    tmo => Tmo,
+    is_stream => IsStream,
+    cb => CB,
+    host => Host
+  },
+  message_loop(Ctx, Buffer, Acc).
+
+message_loop(#{tmo := Tmo, host := Host} = Ctx, Buffer, Acc) ->
   receive
-    {gun_response, Conn, Ref, nofin, 200, _} ->
-      stream_loop(Conn, Ref, Tmo, IsStream, Buffer, Acc, CB, Host);
-    {gun_response, Conn, Ref, _, Status, _} when Status >= 400 ->
-      {error, {http_status, Status}};
-    {gun_data, Conn, Ref, nofin, Data} ->
-      handle_data(Conn, Ref, Tmo, IsStream, <<Buffer/binary, Data/binary>>, Acc, CB, Host);
-    {gun_data, Conn, Ref, fin, Data} ->
-      handle_final_data(<<Buffer/binary, Data/binary>>, IsStream, Acc, CB);
-    {gun_error, Conn, Ref, Reason} -> {error, {stream_err, Reason}};
-    {gun_error, Conn, Reason} -> {error, {gun_err, Reason}};
-    {gun_down, Conn, _, _, _, _} -> {error, connection_closed}
-  after Tmo -> {error, timeout}
+    Msg ->
+      case handle_stream_event(Msg, Ctx, Buffer, Acc) of
+        {next, NewBuffer, NewAcc} -> message_loop(Ctx, NewBuffer, NewAcc);
+        {error, _} = Err -> Err;
+        {ok, _} = Ok -> Ok
+      end
+  after Tmo ->
+    handle_timeout(Host, Tmo)
   end.
+
+handle_stream_event({gun_response, C, R, nofin, 200, _}, #{conn := C, ref := R}, Buffer, Acc) ->
+  {next, Buffer, Acc};
+handle_stream_event({gun_response, C, R, _, Status, _}, #{conn := C, ref := R}, _Buffer, _Acc) when Status >= 400 ->
+  {error, {http_status, Status}};
+handle_stream_event({gun_data, C, R, nofin, Data}, #{conn := C, ref := R} = Ctx, Buffer, Acc) ->
+  #{tmo := Tmo, is_stream := IsStream, cb := CB, host := Host} = Ctx,
+  handle_data(C, R, Tmo, IsStream, <<Buffer/binary, Data/binary>>, Acc, CB, Host);
+handle_stream_event({gun_data, C, R, fin, Data}, #{conn := C, ref := R} = Ctx, Buffer, Acc) ->
+  handle_final_data(<<Buffer/binary, Data/binary>>, maps:get(is_stream, Ctx), Acc, maps:get(cb, Ctx));
+handle_stream_event({gun_error, C, R, Reason}, #{conn := C, ref := R, host := Host}, _Buffer, _Acc) ->
+  logger:error(#{event => ollama_stream_error, host => Host, error => Reason}),
+  {error, {stream_err, Reason}};
+handle_stream_event({gun_error, C, Reason}, #{conn := C, host := Host}, _Buffer, _Acc) ->
+  logger:error(#{event => ollama_gun_error, host => Host, error => Reason}),
+  {error, {gun_err, Reason}};
+handle_stream_event({gun_down, C, _, _, _, _}, #{conn := C, host := Host}, _Buffer, _Acc) ->
+  logger:error(#{event => ollama_connection_down, host => Host}),
+  {error, connection_closed};
+handle_stream_event(_Unknown, _Ctx, Buffer, Acc) ->
+  {next, Buffer, Acc}.
+
+handle_timeout(Host, Tmo) ->
+  logger:error(#{event => ollama_request_timeout, host => Host, timeout => Tmo}),
+  {error, timeout}.
 
 handle_data(Conn, Ref, Tmo, true, Buffer, Acc, CB, Host) ->
   {NextBuf, NewAcc} = process_ndjson(Buffer, Acc, CB),

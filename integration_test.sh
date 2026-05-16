@@ -25,3 +25,13 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 curl -N -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"don-erleone","stream":true,"messages":[{"role":"user","content":"Deploy nginx to k8s"}]}'
+
+
+curl -X POST http://localhost:8080/v1/chat/completions \
+     -H "Content-Type: application/json" \
+     -d '{
+       "model": "don-erleone",
+       "messages": [
+         {"role": "user", "content": "hi"}
+       ]
+     }'

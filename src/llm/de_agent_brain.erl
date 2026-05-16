@@ -38,39 +38,43 @@ prepare_mcp_request(Method, Params) ->
 %% =============================================================================
 
 -spec analyze_loop_step(map()) -> {stop, binary()} | {continue, list()}.
+%% Priority 1: Tool calls always take precedence if present
+analyze_loop_step(#{<<"tool_calls">> := Calls}) when is_list(Calls), length(Calls) > 0 ->
+  {continue, Calls};
+%% Priority 2: Evaluate content
 analyze_loop_step(Msg) ->
-  %% If the model gave us an answer, STOP.
-  HasContent = maps:get(<<"content stream">>, Msg, maps:get(<<"content">>, Msg, <<>>)),
-  HasTools = maps:get(<<"tool_calls">>, Msg, []),
+  Content = extract_content(Msg),
+  evaluate_content(Content).
 
-  case {HasContent, HasTools} of
-    {Content, _} when is_binary(Content), byte_size(Content) > 20 ->
-      {stop, Content};
-    {_, Calls} when is_list(Calls), length(Calls) > 0 ->
-      {continue, Calls};
-    {Content, _} when is_binary(Content), byte_size(Content) > 0 ->
-      {stop, Content};
-    _ ->
-      {stop, <<"Mission complete or no further action required.">>}
-  end.
+evaluate_content(<<>>) ->
+  {stop, <<"Mission complete or no further action required.">>};
+evaluate_content(Content) ->
+  {stop, Content}.
+
+extract_content(Msg) ->
+  maps:get(<<"content stream">>, Msg, maps:get(<<"content">>, Msg, <<>>)).
 
 -spec decode_tools(term()) -> {ok, list()} | {error, term()}.
 decode_tools(Body) ->
+  case safe_decode(Body) of
+    {ok, Decoded} -> extract_tools_list(Decoded);
+    {error, _} = Err -> Err
+  end.
+
+safe_decode(Body) ->
   try
-    Decoded = jsx:decode(to_bin(Body), [return_maps]),
-    case Decoded of
-      #{<<"result">> := #{<<"tools">> := Tools}} -> {ok, Tools};
-      #{<<"tools">> := Tools} -> {ok, Tools};
-      _ -> {error, {bad_structure, Decoded}}
-    end
+    {ok, jsx:decode(to_bin(Body), [return_maps])}
   catch
     _:_ -> {error, json_invalid}
   end.
 
--spec build_sub_prompt(binary(), binary(), list()) -> binary().
+extract_tools_list(#{<<"result">> := #{<<"tools">> := Tools}}) -> {ok, Tools};
+extract_tools_list(#{<<"tools">> := Tools}) -> {ok, Tools};
+extract_tools_list(Other) -> {error, {bad_structure, Other}}.
+
+-spec build_sub_prompt(binary(), binary(), list()) -> list().
 build_sub_prompt(Intent, Goal, Tools) ->
-  ValidNames = [maps:get(<<"name">>, T) || T <- Tools],
-  NamesBin = lists:join(<<", ">>, ValidNames),
+  NamesBin = format_tool_names(Tools),
   [
     "SYSTEM: You are a Senior AI Infrastructure Engineer.\n",
     "STRICT PROTOCOL: You may ONLY use these tools: ", NamesBin, "\n\n",
@@ -82,6 +86,10 @@ build_sub_prompt(Intent, Goal, Tools) ->
     "GOAL: ", Goal, "\n",
     "INTENT: ", Intent
   ].
+
+format_tool_names(Tools) ->
+  Names = [maps:get(<<"name">>, T) || T <- Tools],
+  lists:join(<<", ">>, Names).
 
 -spec to_bin(term()) -> binary().
 to_bin(B) when is_binary(B) -> B;

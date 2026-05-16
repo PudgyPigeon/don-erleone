@@ -49,12 +49,13 @@
 
           export RELEASE_TMP=''${RELEASE_TMP:-/tmp}
           export RELEASE_MUTABLE_DIR=''${RELEASE_MUTABLE_DIR:-/tmp}
-          export RELX_OUT_FILE_PATH=''${RELEASE_TMP}
+          export RELX_OUT_FILE_PATH=''${RELEASE_TMP:-/tmp}
+
+          export RELX_REPLACE_OS_VARS=true
 
           export RELEASE_NODE=''${RELEASE_NODE:-don_erleone@127.0.0.1}
           export RELEASE_COOKIE=''${RELEASE_COOKIE:-agentic_brain_secret}
-          export RELX_REPLACE_OS_VARS=true
-          
+
           # 2. Start EPMD using the stripped binary bundled INSIDE the release 
           echo "=> Starting EPMD..."
 

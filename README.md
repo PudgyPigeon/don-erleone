@@ -3,7 +3,7 @@
 - Phoenix dashboard
 - Telemetry
 - BEAM VM cluster 
-- Swarm Timeline - Coordination context
+- Swarm Timeline - Coordination
 - Document processing
 - Decoupled context
 
