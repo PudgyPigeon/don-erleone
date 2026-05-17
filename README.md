@@ -1,3 +1,11 @@
+# Don Erleone v0.0.1
+
+> **An Erlang/OTP agentic AI orchestrator with a Mafia-themed supervision hierarchy.**
+> Exposes an OpenAI-compatible HTTP API, routes user prompts through a "reasoning" LLM,
+> and delegates infrastructure tasks to "execution" workers powered by a smaller LLM.
+
+![Logo](dashboard.png)
+
 # Next steps:
 - "The Wire"
 - Phoenix dashboard
@@ -7,13 +15,8 @@
 - Document processing
 - Decoupled context
 
-# Don Erleone — Architecture
-
-> **An Erlang/OTP agentic AI orchestrator with a Mafia-themed supervision hierarchy.**
-> Exposes an OpenAI-compatible HTTP API, routes user prompts through a "reasoning" LLM,
-> and delegates infrastructure tasks to "execution" workers powered by a smaller LLM.
-
 ---
+# Architecture
 
 ## 1. Supervision Tree
 
