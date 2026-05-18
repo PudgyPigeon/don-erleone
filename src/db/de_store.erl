@@ -210,7 +210,12 @@ modify_mission(Id, UpdateFun) ->
             [] -> {error, not_found}
         end
     end,
-    handle_transaction(mnesia:transaction(Trans), Id).
+    case handle_transaction(mnesia:transaction(Trans), Id) of
+        ok -> 
+            broadcast_event(updated, Id),
+            ok;
+        Err -> Err
+    end.
 
 -spec execute_write(mission(), integer()) ->
     {ok, integer()}
@@ -220,7 +225,12 @@ execute_write(Record, Id) ->
     Result = mnesia:transaction(fun() ->
         mnesia:write(Record)
     end),
-    handle_write_result(handle_transaction(Result, Id), Id).
+    case handle_write_result(handle_transaction(Result, Id), Id) of
+        {ok, ReturnedId} ->
+            broadcast_event(created, ReturnedId),
+            {ok, ReturnedId};
+        Err -> Err
+    end.
 
 -spec handle_write_result(
     ok | {error, term()},
@@ -312,3 +322,19 @@ mission_result(#mission{result = Result}) -> Result.
 -spec mission_error(mission()) -> term().
 
 mission_error(#mission{error = Error}) -> Error.
+
+%% =============================================================================
+%% Process Group (pg) Broadcasting
+%% =============================================================================
+
+-spec broadcast_event(atom(), integer()) -> ok.
+broadcast_event(Event, MissionId) ->
+    %% Ensure pg is started (safe to call multiple times)
+    catch pg:start_link(),
+    case catch pg:get_members(swarm_dashboard_events) of
+        Pids when is_list(Pids) ->
+            [Pid ! {mission_event, Event, MissionId} || Pid <- Pids],
+            ok;
+        _ ->
+            ok
+    end.
