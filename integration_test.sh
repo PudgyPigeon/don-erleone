@@ -1,6 +1,3 @@
-
-
-
 # Test 1 
 curl -i -X POST http://localhost:8080/v1/chat/completions      -H "Content-Type: application/json"      -d '{
        "model": "nix-agent-001",

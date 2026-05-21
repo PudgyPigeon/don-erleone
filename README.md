@@ -1,10 +1,10 @@
 # Don Erleone v0.0.1
 
-![Logo](dashboard.png)
+> **An Erlang/OTP agentic AI orchestrator with a Mafia-themed supervision hierarchy.**
+> Exposes an OpenAI-compatible HTTP API, routes user prompts through a "reasoning" LLM,
+> and delegates infrastructure tasks to "execution" workers powered by a smaller LLM.
 
-**An Erlang/OTP agentic AI orchestrator with a Mafia-themed supervision hierarchy.**
-Exposes an OpenAI-compatible HTTP API, routes user prompts through a "reasoning" LLM,
-and delegates infrastructure tasks to "execution" workers powered by a smaller LLM.
+![Wire Dashboard GIF](wire-dashboard.gif)
 
 # Next steps:
 - "The Wire"
@@ -138,6 +138,8 @@ Mnesia is used for session and mission persistence. The primary record is define
 
 ### Test Suite
 The system includes a granular unit test suite (85+ tests) following the **Macro-List Style**. Tests are designed to be quiet and isolated using `logger` configuration management.
+
+You can send manual CURL requests to the server and it'll run just fine.
 
 ```bash
 # Run the full suite
